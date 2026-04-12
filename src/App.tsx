@@ -5,6 +5,7 @@ import DailyLog from "./pages/DailyLog";
 import Agents from "./pages/Agents";
 import Clients from "./pages/Clients";
 import Reports from "./pages/Reports";
+import Seed from "./pages/Seed";
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/agents" element={<Agents />} />
         <Route path="/clients" element={<Clients />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/seed" element={<Seed />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
