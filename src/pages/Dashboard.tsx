@@ -1,9 +1,21 @@
 import { useState, useEffect, useCallback } from "react";
-import { Phone, DollarSign, CalendarCheck, HeartPulse, Loader2, RefreshCw } from "lucide-react";
+import { Phone, DollarSign, CalendarCheck, HeartPulse, Loader2, RefreshCw, Clock } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { supabase } from "../lib/supabase";
+import { isBusinessDay, getHolidayName } from "../lib/seed";
 import StatCard from "../components/StatCard";
 import type { DailyLog, Client } from "../types";
+
+function isBusinessHours(): boolean {
+  const now = new Date();
+  const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const h = est.getHours();
+  return h >= 8 && h < 18 && isBusinessDay(est);
+}
+
+function getESTTime(): string {
+  return new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -25,6 +37,17 @@ export default function Dashboard() {
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [feed, setFeed] = useState<DailyLog[]>([]);
   const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [estTime, setEstTime] = useState(getESTTime());
+  const [bizHours, setBizHours] = useState(isBusinessHours());
+
+  // Live EST clock
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setEstTime(getESTTime());
+      setBizHours(isBusinessHours());
+    }, 1000);
+    return () => clearInterval(iv);
+  }, []);
 
   useEffect(() => {
     supabase.from("rh_clients").select("*").order("name").then(({ data }) => {
@@ -129,14 +152,43 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
+      {/* Holiday / Off-hours Banner */}
+      {(() => {
+        const today = new Date();
+        const todayStr = today.toISOString().split("T")[0]!;
+        const holiday = getHolidayName(todayStr);
+        const weekend = today.getDay() === 0 || today.getDay() === 6;
+        if (holiday) return (
+          <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2">
+            <span className="text-amber-600 text-sm font-medium">Holiday — No Operations</span>
+            <span className="text-amber-500 text-xs">({holiday})</span>
+          </div>
+        );
+        if (weekend) return (
+          <div className="mb-4 px-4 py-3 bg-slate-100 border border-slate-200 rounded-xl">
+            <span className="text-slate-500 text-sm font-medium">Weekend — Operations resume Monday</span>
+          </div>
+        );
+        return null;
+      })()}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Operations Dashboard</h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Last updated {lastUpdated.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-            <button onClick={fetchData} className="ml-2 text-teal-500 hover:text-teal-600 inline-flex items-center gap-1"><RefreshCw size={10} />Refresh</button>
-          </p>
+          <div className="flex items-center gap-3 mt-0.5">
+            <p className="text-xs text-slate-400">
+              Last updated {lastUpdated.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+              <button onClick={fetchData} className="ml-2 text-teal-500 hover:text-teal-600 inline-flex items-center gap-1"><RefreshCw size={10} />Refresh</button>
+            </p>
+            <div className="flex items-center gap-1.5 text-xs">
+              <Clock size={10} className="text-slate-400" />
+              <span className="font-mono text-slate-500">{estTime} EST</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold ${bizHours ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-400"}`}>
+                {bizHours ? "LIVE" : "AFTER HOURS"}
+              </span>
+            </div>
+          </div>
         </div>
         <select
           value={selectedClient}
