@@ -110,7 +110,7 @@ export default function DailyLog() {
         {/* Payment amount (conditional) */}
         {form.service_type === "payment" && (
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Amount Collected (₹)</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Amount Collected ($)</label>
             <input type="number" value={form.amount_collected} onChange={(e) => update("amount_collected", e.target.value)} placeholder="0" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500" />
           </div>
         )}
