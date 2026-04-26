@@ -56,6 +56,7 @@ export default function Dashboard() {
   }, []);
 
   const fetchData = useCallback(async () => {
+    try {
     const today = new Date().toISOString().split("T")[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
 
@@ -130,10 +131,19 @@ export default function Dashboard() {
     if (feedData) setFeed(feedData as any);
 
     setLastUpdated(new Date());
-    setLoading(false);
+    } catch (err) {
+      console.error("[dashboard] Fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, [selectedClient]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    fetchData().then(() => {
+      // If no data yet (seed may be running), retry after 5 seconds
+      setTimeout(() => { if (feed.length === 0) fetchData(); }, 5000);
+    });
+  }, [fetchData]);
 
   // Auto-refresh every 3 minutes
   useEffect(() => {
@@ -147,7 +157,13 @@ export default function Dashboard() {
   }
 
   if (loading && feed.length === 0) {
-    return <div className="flex items-center justify-center h-screen text-slate-400"><Loader2 className="animate-spin mr-2" size={20} />Loading dashboard...</div>;
+    return (
+      <div className="flex flex-col items-center justify-center h-screen text-slate-400 gap-3">
+        <Loader2 className="animate-spin" size={24} />
+        <span className="text-sm">Connecting to RevorHealth...</span>
+        <span className="text-xs text-slate-300">Loading operations data</span>
+      </div>
+    );
   }
 
   return (
