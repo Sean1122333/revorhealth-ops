@@ -1,13 +1,16 @@
 import { Routes, Route, Navigate } from "react-router-dom";
+import { useEffect } from "react";
 import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import DailyLog from "./pages/DailyLog";
 import Agents from "./pages/Agents";
 import Clients from "./pages/Clients";
 import Reports from "./pages/Reports";
-import Seed from "./pages/Seed";
+import { autoSeed } from "./lib/seed";
 
 export default function App() {
+  useEffect(() => { autoSeed(); }, []);
+
   return (
     <Routes>
       <Route element={<Layout />}>
@@ -16,7 +19,6 @@ export default function App() {
         <Route path="/agents" element={<Agents />} />
         <Route path="/clients" element={<Clients />} />
         <Route path="/reports" element={<Reports />} />
-        <Route path="/seed" element={<Seed />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

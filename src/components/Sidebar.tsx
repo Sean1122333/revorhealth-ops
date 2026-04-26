@@ -16,7 +16,7 @@ export default function Sidebar() {
         <h1 className="text-lg font-bold tracking-wide">
           <span className="text-teal-400">Revor</span>Health
         </h1>
-        <p className="text-[10px] text-slate-400 mt-0.5">Operations Dashboard</p>
+        <p className="text-[9px] text-slate-500 mt-0.5">Powering Healthcare Revenue Recovery</p>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {links.map(({ to, icon: Icon, label }) => (
@@ -37,7 +37,7 @@ export default function Sidebar() {
         ))}
       </nav>
       <div className="px-5 py-4 border-t border-slate-700/50">
-        <p className="text-[10px] text-slate-500">v1.0 — RevorHealth Inc.</p>
+        <p className="text-[9px] text-slate-500 leading-relaxed">&copy; 2026 RevorHealth Inc.<br/>All rights reserved.</p>
       </div>
     </aside>
   );

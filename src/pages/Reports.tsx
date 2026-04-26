@@ -67,7 +67,7 @@ export default function Reports() {
         {[
           { label: "Total Logs", value: summary.totalLogs },
           { label: "Total Calls", value: summary.totalCalls.toLocaleString("en-IN") },
-          { label: "Collections", value: `₹${summary.totalCollections.toLocaleString("en-IN")}` },
+          { label: "Collections", value: `$${summary.totalCollections.toLocaleString("en-IN")}` },
           { label: "Avg Calls/Log", value: summary.avgCalls },
         ].map((s) => (
           <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
@@ -101,7 +101,7 @@ export default function Reports() {
                 <td className="px-4 py-2.5 text-slate-700">{l.calls_made}</td>
                 <td className="px-4 py-2.5 text-slate-700">{l.calls_connected}</td>
                 <td className="px-4 py-2.5 capitalize text-slate-500">{l.outcome}</td>
-                <td className="px-4 py-2.5 text-slate-700">{l.amount_collected > 0 ? `₹${l.amount_collected.toLocaleString("en-IN")}` : "—"}</td>
+                <td className="px-4 py-2.5 text-slate-700">{l.amount_collected > 0 ? `$${l.amount_collected.toLocaleString("en-IN")}` : "—"}</td>
               </tr>
             ))}
           </tbody>
