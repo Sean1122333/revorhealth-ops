@@ -1,10 +1,11 @@
-DROP TABLE IF EXISTS activity_log, work_items, staff, clients, teams CASCADE;
 -- ============================================================
--- RevorHealth RCM Ops — Schema + Seed
--- New Supabase project. Paste this entire file into the
--- SQL Editor and run it once. Then create the 5 demo auth
--- users in Dashboard → Authentication → Users (see README).
+-- RevorHealth RCM Ops — Schema + Seed (7-Stage, Blueprint §1–3)
+-- Fresh project: paste into SQL Editor and run once.
+-- Then create the 5 demo auth users in Dashboard →
+-- Authentication → Users (see NEXT STEP at the bottom).
 -- ============================================================
+
+DROP TABLE IF EXISTS activity_log, work_items, payments, staff, clients, teams CASCADE;
 
 
 -- ──────────────────────────────────────────────────────────
@@ -18,8 +19,6 @@ CREATE TABLE teams (
   display_order smallint NOT NULL DEFAULT 0
 );
 
--- Staff owns its own UUID (not auth.uid()).
--- auth_user_id is populated by trigger when the auth user is created.
 CREATE TABLE staff (
   id           uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   auth_user_id uuid    UNIQUE REFERENCES auth.users(id) ON DELETE SET NULL,
@@ -41,17 +40,32 @@ CREATE TABLE clients (
 );
 
 CREATE TABLE work_items (
-  id                uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id         uuid         NOT NULL REFERENCES clients(id),
-  patient_fake_name text         NOT NULL,
-  current_stage     text         NOT NULL,   -- matches teams.slug
-  status            text         NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','in_progress','ready_for_next','completed','on_hold')),
-  assigned_to       uuid         REFERENCES staff(id),
-  value             numeric(10,2) NOT NULL DEFAULT 0,
-  days_in_stage     smallint     NOT NULL DEFAULT 0,
-  created_at        timestamptz  NOT NULL DEFAULT now(),
-  updated_at        timestamptz  NOT NULL DEFAULT now()
+  id                 uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id          uuid          NOT NULL REFERENCES clients(id),
+  patient_fake_name  text          NOT NULL,
+  current_stage      text          NOT NULL,
+  status             text          NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','in_progress','ready_for_next','completed','on_hold')),
+  assigned_to        uuid          REFERENCES staff(id),
+  value              numeric(10,2) NOT NULL DEFAULT 0,
+  days_in_stage      smallint      NOT NULL DEFAULT 0,
+  -- Blueprint §2: raw claim_status value before stage mapping
+  raw_status         text,
+  -- Blueprint §3: denial sub-classification (denial_management only)
+  denial_category    text,
+  denial_appealable  boolean,
+  created_at         timestamptz   NOT NULL DEFAULT now(),
+  updated_at         timestamptz   NOT NULL DEFAULT now()
+);
+
+CREATE TABLE payments (
+  id          uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+  work_item_id uuid         REFERENCES work_items(id) ON DELETE SET NULL,
+  amount      numeric(10,2) NOT NULL DEFAULT 0,
+  adjustment  numeric(10,2) NOT NULL DEFAULT 0,
+  tax         numeric(10,2) NOT NULL DEFAULT 0,
+  paid_at     timestamptz   NOT NULL DEFAULT now(),
+  created_at  timestamptz   NOT NULL DEFAULT now()
 );
 
 CREATE TABLE activity_log (
@@ -81,11 +95,12 @@ CREATE INDEX idx_work_created      ON work_items(created_at);
 CREATE INDEX idx_activity_item     ON activity_log(work_item_id);
 CREATE INDEX idx_activity_actor    ON activity_log(actor_id);
 CREATE INDEX idx_activity_created  ON activity_log(created_at);
+CREATE INDEX idx_payments_paid     ON payments(paid_at);
 
 
 -- ──────────────────────────────────────────────────────────
 -- 3. HELPER FUNCTIONS
--- SECURITY DEFINER so they bypass RLS on the staff table
+-- SECURITY DEFINER to bypass RLS on the staff table
 -- (avoids infinite recursion in policies that read staff).
 -- ──────────────────────────────────────────────────────────
 
@@ -122,7 +137,6 @@ $$;
 -- 4. TRIGGERS
 -- ──────────────────────────────────────────────────────────
 
--- Auto-stamp updated_at on work_items.
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
@@ -135,8 +149,7 @@ CREATE TRIGGER trg_work_items_updated_at
 BEFORE UPDATE ON work_items
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- When a Supabase Auth user is created, link them to the
--- pre-seeded staff record that shares the same email.
+-- Link Supabase Auth user to pre-seeded staff record on creation.
 CREATE OR REPLACE FUNCTION link_auth_to_staff()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public AS $$
@@ -162,22 +175,19 @@ ALTER TABLE teams        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE staff        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE clients      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE work_items   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;
 
 -- ── teams ────────────────────────────────────────────────
--- Any logged-in staff member can read all teams (needed for
--- stage labels, kanban headers, etc.).
 CREATE POLICY "teams: authenticated read"
 ON teams FOR SELECT
 USING (current_staff_id() IS NOT NULL);
 
 -- ── staff ────────────────────────────────────────────────
--- Every user can always read their own row.
 CREATE POLICY "staff: read own row"
 ON staff FOR SELECT
 USING (auth_user_id = auth.uid());
 
--- Senior associates, team leads, and managers see their whole team.
 CREATE POLICY "staff: read own team"
 ON staff FOR SELECT
 USING (
@@ -185,20 +195,16 @@ USING (
   AND team_id = current_staff_team_id()
 );
 
--- Manager sees every staff record.
 CREATE POLICY "staff: manager read all"
 ON staff FOR SELECT
 USING (current_staff_role() = 'manager');
 
 -- ── clients ──────────────────────────────────────────────
--- Read-only for all authenticated staff.
 CREATE POLICY "clients: authenticated read"
 ON clients FOR SELECT
 USING (current_staff_id() IS NOT NULL);
 
 -- ── work_items ───────────────────────────────────────────
-
--- Associate: only work items assigned directly to them.
 CREATE POLICY "work_items: associate read assigned"
 ON work_items FOR SELECT
 USING (
@@ -206,7 +212,6 @@ USING (
   AND assigned_to = current_staff_id()
 );
 
--- Senior associate + team lead: all items in their team's stage.
 CREATE POLICY "work_items: team read by stage"
 ON work_items FOR SELECT
 USING (
@@ -214,13 +219,10 @@ USING (
   AND current_stage = current_staff_team_slug()
 );
 
--- Manager: all items.
 CREATE POLICY "work_items: manager read all"
 ON work_items FOR SELECT
 USING (current_staff_role() = 'manager');
 
--- Associate: can UPDATE only items assigned to them
--- (the app restricts which columns can be changed).
 CREATE POLICY "work_items: associate update assigned"
 ON work_items FOR UPDATE
 USING (
@@ -232,8 +234,6 @@ WITH CHECK (
   AND assigned_to = current_staff_id()
 );
 
--- Senior associate: can UPDATE any item in their stage
--- (includes reassigning assigned_to within the team).
 CREATE POLICY "work_items: senior_associate update stage"
 ON work_items FOR UPDATE
 USING (
@@ -245,7 +245,6 @@ WITH CHECK (
   AND current_stage = current_staff_team_slug()
 );
 
--- Team lead: full update on items in their stage.
 CREATE POLICY "work_items: team_lead update stage"
 ON work_items FOR UPDATE
 USING (
@@ -257,20 +256,21 @@ WITH CHECK (
   AND current_stage = current_staff_team_slug()
 );
 
--- Manager: update anything.
 CREATE POLICY "work_items: manager update all"
 ON work_items FOR UPDATE
 USING (current_staff_role() = 'manager')
 WITH CHECK (current_staff_role() = 'manager');
 
--- Manager: insert new work items (for future manual intake).
 CREATE POLICY "work_items: manager insert"
 ON work_items FOR INSERT
 WITH CHECK (current_staff_role() = 'manager');
 
--- ── activity_log ─────────────────────────────────────────
+-- ── payments ─────────────────────────────────────────────
+CREATE POLICY "payments: authenticated read"
+ON payments FOR SELECT
+USING (current_staff_id() IS NOT NULL);
 
--- Team lead: read logs for items currently in their stage.
+-- ── activity_log ─────────────────────────────────────────
 CREATE POLICY "activity_log: team_lead read stage"
 ON activity_log FOR SELECT
 USING (
@@ -281,12 +281,10 @@ USING (
   )
 );
 
--- Manager: read all.
 CREATE POLICY "activity_log: manager read all"
 ON activity_log FOR SELECT
 USING (current_staff_role() = 'manager');
 
--- Any authenticated staff can insert their own action entries.
 CREATE POLICY "activity_log: insert own actions"
 ON activity_log FOR INSERT
 WITH CHECK (
@@ -296,21 +294,17 @@ WITH CHECK (
 
 
 -- ──────────────────────────────────────────────────────────
--- 6. SEED DATA — TEAMS
+-- 6. SEED DATA — TEAMS (7 stages, Blueprint §1)
 -- ──────────────────────────────────────────────────────────
 
 INSERT INTO teams (name, slug, display_order) VALUES
-  ('Eligibility & Verification', 'eligibility',        1),
-  ('Charge Entry',               'charge_entry',        2),
-  ('Medical Coding',             'coding',              3),
-  ('Claims Submission',          'claims_submission',   4),
-  ('Payment Posting',            'payment_posting',     5),
-  ('AR Follow-Up',               'ar_follow_up',        6),
-  ('Denial Management',          'denial_management',   7),
-  ('Appeals',                    'appeals',             8),
-  ('Patient Collections',        'patient_collections', 9),
-  ('Credentialing',              'credentialing',      10),
-  ('Reporting & Analytics',      'reporting',          11);
+  ('Submitted Claims',   'submitted',         1),
+  ('Payment Posting',    'payment_posting',    2),
+  ('Denial Management',  'denial_management',  3),
+  ('Appeals',            'appeals',            4),
+  ('AR Follow-Up',       'ar_follow_up',       5),
+  ('Collections',        'collections',        6),
+  ('On Hold',            'on_hold',            7);
 
 
 -- ──────────────────────────────────────────────────────────
@@ -341,111 +335,101 @@ INSERT INTO clients (name, specialty, location) VALUES
 
 
 -- ──────────────────────────────────────────────────────────
--- 8. SEED DATA — STAFF (50 people)
--- auth_user_id is NULL for all; the trigger fills it when
--- the 5 demo auth users are created in the dashboard.
+-- 8. SEED DATA — STAFF (50 people across 7 teams)
+-- auth_user_id is NULL; the trigger fills it when the
+-- 5 demo auth users are created in the Auth dashboard.
 -- ──────────────────────────────────────────────────────────
 
--- ── 1 Manager ────────────────────────────────────────────
+-- ── 1 Manager (no team) ──────────────────────────────────
 INSERT INTO staff (full_name, email, role, team_id) VALUES
   ('Sarah Chen', 'manager@demo.rcm', 'manager', NULL);
 
--- ── 11 Team Leads (one per team) ─────────────────────────
--- 2 demo users included (lead.eligibility, lead.coding)
+-- ── 7 Team Leads (2 are demo auth users) ─────────────────
 INSERT INTO staff (full_name, email, role, team_id)
-  SELECT 'Marcus Webb',    'lead.eligibility@demo.rcm',       'team_lead', id FROM teams WHERE slug='eligibility'      UNION ALL
-  SELECT 'Diana Park',     'lead.charge@revorhealth.com',     'team_lead', id FROM teams WHERE slug='charge_entry'     UNION ALL
-  SELECT 'Priya Sharma',   'lead.coding@demo.rcm',            'team_lead', id FROM teams WHERE slug='coding'           UNION ALL
-  SELECT 'Kevin O''Brien', 'lead.claims@revorhealth.com',     'team_lead', id FROM teams WHERE slug='claims_submission' UNION ALL
-  SELECT 'Aisha Thompson', 'lead.payment@revorhealth.com',    'team_lead', id FROM teams WHERE slug='payment_posting'  UNION ALL
-  SELECT 'Raj Patel',      'lead.ar@revorhealth.com',         'team_lead', id FROM teams WHERE slug='ar_follow_up'     UNION ALL
-  SELECT 'Natalie Cruz',   'lead.denial@revorhealth.com',     'team_lead', id FROM teams WHERE slug='denial_management' UNION ALL
-  SELECT 'Ben Kowalski',   'lead.appeals@revorhealth.com',    'team_lead', id FROM teams WHERE slug='appeals'          UNION ALL
-  SELECT 'Yemi Adeyemi',   'lead.collections@revorhealth.com','team_lead', id FROM teams WHERE slug='patient_collections' UNION ALL
-  SELECT 'Caitlin Ross',   'lead.credentialing@revorhealth.com','team_lead',id FROM teams WHERE slug='credentialing'   UNION ALL
-  SELECT 'Derek Nguyen',   'lead.reporting@revorhealth.com',  'team_lead', id FROM teams WHERE slug='reporting';
+  SELECT 'Marcus Webb',    'lead.eligibility@demo.rcm',        'team_lead', id FROM teams WHERE slug='submitted'         UNION ALL
+  SELECT 'Priya Sharma',   'lead.coding@demo.rcm',             'team_lead', id FROM teams WHERE slug='denial_management' UNION ALL
+  SELECT 'Aisha Thompson', 'lead.payment@revorhealth.com',     'team_lead', id FROM teams WHERE slug='payment_posting'   UNION ALL
+  SELECT 'Ben Kowalski',   'lead.appeals@revorhealth.com',     'team_lead', id FROM teams WHERE slug='appeals'           UNION ALL
+  SELECT 'Raj Patel',      'lead.ar@revorhealth.com',          'team_lead', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
+  SELECT 'Yemi Adeyemi',   'lead.collections@revorhealth.com', 'team_lead', id FROM teams WHERE slug='collections'       UNION ALL
+  SELECT 'Caitlin Ross',   'lead.onhold@revorhealth.com',      'team_lead', id FROM teams WHERE slug='on_hold';
 
--- ── 11 Senior Associates (one per team) ──────────────────
--- 1 demo user included (senior.ar)
+-- ── 7 Senior Associates (1 is a demo auth user) ──────────
 INSERT INTO staff (full_name, email, role, team_id)
-  SELECT 'Fatima Al-Hassan', 'sr.eligibility@revorhealth.com',  'senior_associate', id FROM teams WHERE slug='eligibility'       UNION ALL
-  SELECT 'Tony Reyes',       'sr.charge@revorhealth.com',       'senior_associate', id FROM teams WHERE slug='charge_entry'      UNION ALL
-  SELECT 'Mei Lin',          'sr.coding@revorhealth.com',       'senior_associate', id FROM teams WHERE slug='coding'            UNION ALL
-  SELECT 'Layla Hassan',     'sr.claims@revorhealth.com',       'senior_associate', id FROM teams WHERE slug='claims_submission'  UNION ALL
-  SELECT 'Omar Khalid',      'sr.payment@revorhealth.com',      'senior_associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
-  SELECT 'Jordan Taylor',    'senior.ar@demo.rcm',              'senior_associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
-  SELECT 'Brenda Walsh',     'sr.denial@revorhealth.com',       'senior_associate', id FROM teams WHERE slug='denial_management'  UNION ALL
-  SELECT 'Carlos Vega',      'sr.appeals@revorhealth.com',      'senior_associate', id FROM teams WHERE slug='appeals'           UNION ALL
-  SELECT 'Imani Foster',     'sr.collections@revorhealth.com',  'senior_associate', id FROM teams WHERE slug='patient_collections' UNION ALL
-  SELECT 'Hannah Kim',       'sr.credentialing@revorhealth.com','senior_associate', id FROM teams WHERE slug='credentialing'     UNION ALL
-  SELECT 'Alex Santos',      'sr.reporting@revorhealth.com',    'senior_associate', id FROM teams WHERE slug='reporting';
+  SELECT 'Fatima Al-Hassan', 'sr.submitted@revorhealth.com',   'senior_associate', id FROM teams WHERE slug='submitted'         UNION ALL
+  SELECT 'Brenda Walsh',     'sr.denial@revorhealth.com',      'senior_associate', id FROM teams WHERE slug='denial_management' UNION ALL
+  SELECT 'Omar Khalid',      'sr.payment@revorhealth.com',     'senior_associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
+  SELECT 'Carlos Vega',      'sr.appeals@revorhealth.com',     'senior_associate', id FROM teams WHERE slug='appeals'           UNION ALL
+  SELECT 'Jordan Taylor',    'senior.ar@demo.rcm',             'senior_associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
+  SELECT 'Imani Foster',     'sr.collections@revorhealth.com', 'senior_associate', id FROM teams WHERE slug='collections'       UNION ALL
+  SELECT 'Hannah Kim',       'sr.onhold@revorhealth.com',      'senior_associate', id FROM teams WHERE slug='on_hold';
 
--- ── 27 Associates ─────────────────────────────────────────
--- 1 demo user included (assoc.charge)
+-- ── 35 Associates (5 per team, 1 is a demo auth user) ────
 INSERT INTO staff (full_name, email, role, team_id)
-  -- Eligibility (4)
-  SELECT 'Ryan Murphy',      'a.elig1@revorhealth.com',  'associate', id FROM teams WHERE slug='eligibility'       UNION ALL
-  SELECT 'Jessica Chan',     'a.elig2@revorhealth.com',  'associate', id FROM teams WHERE slug='eligibility'       UNION ALL
-  SELECT 'Brandon Lee',      'a.elig3@revorhealth.com',  'associate', id FROM teams WHERE slug='eligibility'       UNION ALL
-  SELECT 'Grace Liu',        'a.elig4@revorhealth.com',  'associate', id FROM teams WHERE slug='eligibility'       UNION ALL
-  -- Charge Entry (3 incl. demo user)
-  SELECT 'Elena Rodriguez',  'assoc.charge@demo.rcm',    'associate', id FROM teams WHERE slug='charge_entry'      UNION ALL
-  SELECT 'Sophia Martin',    'a.charge1@revorhealth.com','associate', id FROM teams WHERE slug='charge_entry'      UNION ALL
-  SELECT 'Noah Wilson',      'a.charge2@revorhealth.com','associate', id FROM teams WHERE slug='charge_entry'      UNION ALL
-  -- Coding (3)
-  SELECT 'Olivia Brown',     'a.code1@revorhealth.com',  'associate', id FROM teams WHERE slug='coding'            UNION ALL
-  SELECT 'Liam Davis',       'a.code2@revorhealth.com',  'associate', id FROM teams WHERE slug='coding'            UNION ALL
-  SELECT 'Emma White',       'a.code3@revorhealth.com',  'associate', id FROM teams WHERE slug='coding'            UNION ALL
-  -- Claims Submission (3)
-  SELECT 'Lucas Garcia',     'a.claims1@revorhealth.com','associate', id FROM teams WHERE slug='claims_submission'  UNION ALL
-  SELECT 'Amara Johnson',    'a.claims2@revorhealth.com','associate', id FROM teams WHERE slug='claims_submission'  UNION ALL
-  SELECT 'Tyler Scott',      'a.claims3@revorhealth.com','associate', id FROM teams WHERE slug='claims_submission'  UNION ALL
-  -- Payment Posting (3)
-  SELECT 'Zoe Anderson',     'a.pay1@revorhealth.com',   'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
-  SELECT 'Caleb Moore',      'a.pay2@revorhealth.com',   'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
-  SELECT 'Eric Hoffman',     'a.pay3@revorhealth.com',   'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
-  -- AR Follow-Up (4)
-  SELECT 'Aaliyah Jackson',  'a.ar1@revorhealth.com',    'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
-  SELECT 'Hunter Hill',      'a.ar2@revorhealth.com',    'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
-  SELECT 'Leila Nazari',     'a.ar3@revorhealth.com',    'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
-  SELECT 'Rachel Stern',     'a.ar4@revorhealth.com',    'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
-  -- Denial Management (2)
-  SELECT 'Jasper Chen',      'a.den1@revorhealth.com',   'associate', id FROM teams WHERE slug='denial_management'  UNION ALL
-  SELECT 'Sasha Williams',   'a.den2@revorhealth.com',   'associate', id FROM teams WHERE slug='denial_management'  UNION ALL
-  -- Appeals (1)
-  SELECT 'Victor Torres',    'a.app1@revorhealth.com',   'associate', id FROM teams WHERE slug='appeals'           UNION ALL
-  -- Patient Collections (2)
-  SELECT 'Mia Robinson',     'a.coll1@revorhealth.com',  'associate', id FROM teams WHERE slug='patient_collections' UNION ALL
-  SELECT 'Isaiah Thomas',    'a.coll2@revorhealth.com',  'associate', id FROM teams WHERE slug='patient_collections' UNION ALL
-  -- Credentialing (1)
-  SELECT 'Nadia Petrov',     'a.cred1@revorhealth.com',  'associate', id FROM teams WHERE slug='credentialing'     UNION ALL
-  -- Reporting (1)
-  SELECT 'Samuel Okafor',    'a.rep1@revorhealth.com',   'associate', id FROM teams WHERE slug='reporting';
+  -- Submitted (5, incl. demo user Elena Rodriguez)
+  SELECT 'Elena Rodriguez', 'assoc.charge@demo.rcm',       'associate', id FROM teams WHERE slug='submitted'         UNION ALL
+  SELECT 'Ryan Murphy',     'a.sub1@revorhealth.com',      'associate', id FROM teams WHERE slug='submitted'         UNION ALL
+  SELECT 'Jessica Chan',    'a.sub2@revorhealth.com',      'associate', id FROM teams WHERE slug='submitted'         UNION ALL
+  SELECT 'Brandon Lee',     'a.sub3@revorhealth.com',      'associate', id FROM teams WHERE slug='submitted'         UNION ALL
+  SELECT 'Grace Liu',       'a.sub4@revorhealth.com',      'associate', id FROM teams WHERE slug='submitted'         UNION ALL
+  -- Denial Management (5)
+  SELECT 'Jasper Chen',     'a.den1@revorhealth.com',      'associate', id FROM teams WHERE slug='denial_management' UNION ALL
+  SELECT 'Sasha Williams',  'a.den2@revorhealth.com',      'associate', id FROM teams WHERE slug='denial_management' UNION ALL
+  SELECT 'Olivia Brown',    'a.den3@revorhealth.com',      'associate', id FROM teams WHERE slug='denial_management' UNION ALL
+  SELECT 'Liam Davis',      'a.den4@revorhealth.com',      'associate', id FROM teams WHERE slug='denial_management' UNION ALL
+  SELECT 'Emma White',      'a.den5@revorhealth.com',      'associate', id FROM teams WHERE slug='denial_management' UNION ALL
+  -- Payment Posting (5)
+  SELECT 'Zoe Anderson',    'a.pay1@revorhealth.com',      'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
+  SELECT 'Caleb Moore',     'a.pay2@revorhealth.com',      'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
+  SELECT 'Eric Hoffman',    'a.pay3@revorhealth.com',      'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
+  SELECT 'Sophia Martin',   'a.pay4@revorhealth.com',      'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
+  SELECT 'Noah Wilson',     'a.pay5@revorhealth.com',      'associate', id FROM teams WHERE slug='payment_posting'   UNION ALL
+  -- Appeals (5)
+  SELECT 'Victor Torres',   'a.app1@revorhealth.com',      'associate', id FROM teams WHERE slug='appeals'           UNION ALL
+  SELECT 'Lucas Garcia',    'a.app2@revorhealth.com',      'associate', id FROM teams WHERE slug='appeals'           UNION ALL
+  SELECT 'Amara Johnson',   'a.app3@revorhealth.com',      'associate', id FROM teams WHERE slug='appeals'           UNION ALL
+  SELECT 'Tyler Scott',     'a.app4@revorhealth.com',      'associate', id FROM teams WHERE slug='appeals'           UNION ALL
+  SELECT 'Diana Park',      'a.app5@revorhealth.com',      'associate', id FROM teams WHERE slug='appeals'           UNION ALL
+  -- AR Follow-Up (5)
+  SELECT 'Aaliyah Jackson', 'a.ar1@revorhealth.com',       'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
+  SELECT 'Hunter Hill',     'a.ar2@revorhealth.com',       'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
+  SELECT 'Leila Nazari',    'a.ar3@revorhealth.com',       'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
+  SELECT 'Rachel Stern',    'a.ar4@revorhealth.com',       'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
+  SELECT 'Matthew Brown',   'a.ar5@revorhealth.com',       'associate', id FROM teams WHERE slug='ar_follow_up'      UNION ALL
+  -- Collections (5)
+  SELECT 'Mia Robinson',    'a.coll1@revorhealth.com',     'associate', id FROM teams WHERE slug='collections'       UNION ALL
+  SELECT 'Isaiah Thomas',   'a.coll2@revorhealth.com',     'associate', id FROM teams WHERE slug='collections'       UNION ALL
+  SELECT 'Nadia Petrov',    'a.coll3@revorhealth.com',     'associate', id FROM teams WHERE slug='collections'       UNION ALL
+  SELECT 'Samuel Okafor',   'a.coll4@revorhealth.com',     'associate', id FROM teams WHERE slug='collections'       UNION ALL
+  SELECT 'Kevin O''Brien',  'a.coll5@revorhealth.com',     'associate', id FROM teams WHERE slug='collections'       UNION ALL
+  -- On Hold (5)
+  SELECT 'Natalie Cruz',    'a.hold1@revorhealth.com',     'associate', id FROM teams WHERE slug='on_hold'           UNION ALL
+  SELECT 'Derek Nguyen',    'a.hold2@revorhealth.com',     'associate', id FROM teams WHERE slug='on_hold'           UNION ALL
+  SELECT 'Mark Johnson',    'a.hold3@revorhealth.com',     'associate', id FROM teams WHERE slug='on_hold'           UNION ALL
+  SELECT 'Ashley Kim',      'a.hold4@revorhealth.com',     'associate', id FROM teams WHERE slug='on_hold'           UNION ALL
+  SELECT 'Daniel Park',     'a.hold5@revorhealth.com',     'associate', id FROM teams WHERE slug='on_hold';
 
 
 -- ──────────────────────────────────────────────────────────
--- 9. SEED DATA — WORK ITEMS + ACTIVITY LOG
--- Generates ~505 work items distributed realistically
--- across 11 stages, then creates activity log entries
--- for every non-pending item.
+-- 9. SEED DATA — WORK ITEMS + ACTIVITY LOG (~465 items)
+-- 7 stages, §2 raw_status, §3 denial_category/appealable
 -- ──────────────────────────────────────────────────────────
 
 DO $$
 DECLARE
-  -- Stage configuration
+  -- Stage config in STAGE_ORDER (matches src/types/index.ts)
   stage_slugs   text[]    := ARRAY[
-    'eligibility','charge_entry','coding','claims_submission','payment_posting',
-    'ar_follow_up','denial_management','appeals','patient_collections','credentialing','reporting'
+    'submitted','denial_management','appeals',
+    'ar_follow_up','collections','on_hold','payment_posting'
   ];
-  stage_counts  integer[] := ARRAY[80, 70, 65, 60, 55, 50, 40, 25, 35, 15, 10];
-  -- Claim value ranges (min, max) per stage; reporting has no dollar value
-  stage_min_val numeric[]  := ARRAY[150, 200, 300, 400,  500,  600,  800, 1000,  200,  500, 0];
-  stage_max_val numeric[]  := ARRAY[350, 600, 900, 1400, 2200, 3500, 5000, 9000, 1800, 2500, 0];
-  -- Days-in-stage ranges (items age as they move through the pipeline)
-  stage_min_days integer[] := ARRAY[1, 1, 2,  1,  1,  5, 10, 15,  7, 30, 1];
-  stage_max_days integer[] := ARRAY[4, 3, 6,  4,  5, 35, 50, 70, 95, 90, 7];
+  stage_counts  integer[] := ARRAY[150, 120, 55, 70, 20, 15, 35];
+  -- Claim value ranges per stage (denial/appeals higher = contested amounts)
+  stage_min_val numeric[]  := ARRAY[200,  500,  800,  400, 150, 100, 300];
+  stage_max_val numeric[]  := ARRAY[1500, 8000, 12000, 6000, 2000, 3000, 5000];
+  -- Days-in-stage ranges (aging increases as claims sit)
+  stage_min_days integer[] := ARRAY[1, 10, 15, 5, 30, 5, 1];
+  stage_max_days integer[] := ARRAY[5, 50, 70, 40, 95, 30, 5];
 
-  -- Fake name pools (no real PHI)
   first_names text[] := ARRAY[
     'James','Maria','Robert','Patricia','John','Jennifer','Michael','Linda',
     'William','Barbara','David','Susan','Richard','Jessica','Joseph','Sarah',
@@ -461,60 +445,54 @@ DECLARE
     'White','Harris','Sanchez','Clark','Ramirez','Lewis','Robinson'
   ];
 
-  -- Working variables
-  client_ids   uuid[];
-  stage_staff  uuid[];
-  i            integer;
-  j            integer;
-  slug         text;
-  item_count   integer;
-  new_item_id  uuid;
-  chosen_client uuid;
-  chosen_staff  uuid;
-  chosen_status text;
-  chosen_value  numeric;
-  chosen_days   integer;
-  patient_name  text;
-  created_ts    timestamptz;
-  updated_ts    timestamptz;
-  actor_id_val  uuid;
-  rnd           float;
-  fn_len        integer := 40;
-  ln_len        integer := 30;
-  staff_len     integer;
+  client_ids        uuid[];
+  stage_staff       uuid[];
+  i                 integer;
+  j                 integer;
+  slug              text;
+  item_count        integer;
+  new_item_id       uuid;
+  chosen_client     uuid;
+  chosen_staff      uuid;
+  chosen_status     text;
+  chosen_value      numeric;
+  chosen_days       integer;
+  chosen_raw_status text;
+  chosen_denial_cat text;
+  chosen_appealable boolean;
+  patient_name      text;
+  created_ts        timestamptz;
+  updated_ts        timestamptz;
+  actor_id_val      uuid;
+  rnd               float;
+  fn_len            integer := 42;
+  ln_len            integer := 30;
+  staff_len         integer;
 
 BEGIN
-  -- Load all client IDs
   SELECT ARRAY(SELECT id FROM clients ORDER BY random()) INTO client_ids;
 
   FOR i IN 1..array_length(stage_slugs, 1) LOOP
     slug       := stage_slugs[i];
     item_count := stage_counts[i];
 
-    -- Collect associate + senior_associate IDs for this stage
     SELECT ARRAY(
-      SELECT s.id
-      FROM staff s
+      SELECT s.id FROM staff s
       JOIN teams t ON t.id = s.team_id
-      WHERE t.slug = stage_slugs[i]
-        AND s.role IN ('associate','senior_associate')
+      WHERE t.slug = slug AND s.role IN ('associate','senior_associate')
     ) INTO stage_staff;
-
     staff_len := COALESCE(array_length(stage_staff, 1), 0);
 
     FOR j IN 1..item_count LOOP
 
-      -- Random client
       chosen_client := client_ids[1 + (floor(random() * array_length(client_ids, 1)))::integer];
 
-      -- 80% assigned, 20% unassigned (sitting in the queue)
       IF staff_len > 0 AND random() > 0.2 THEN
         chosen_staff := stage_staff[1 + (floor(random() * staff_len))::integer];
       ELSE
         chosen_staff := NULL;
       END IF;
 
-      -- Weighted status distribution
       rnd := random();
       chosen_status := CASE
         WHEN rnd < 0.28 THEN 'pending'
@@ -524,98 +502,134 @@ BEGIN
         ELSE                  'on_hold'
       END;
 
-      -- Claim value
-      IF stage_max_val[i] = 0 THEN
-        chosen_value := 0;
-      ELSE
-        chosen_value := stage_min_val[i]
-          + (floor(random() * (stage_max_val[i] - stage_min_val[i])))::numeric;
-      END IF;
+      chosen_value := stage_min_val[i]
+        + (floor(random() * (stage_max_val[i] - stage_min_val[i])))::numeric;
 
-      -- Days in stage (older items in later stages = more realistic AR aging)
       chosen_days := stage_min_days[i]
         + (floor(random() * (stage_max_days[i] - stage_min_days[i])))::integer;
 
-      -- Fake patient name
+      -- §2: raw_status — plausible claim_status values per stage
+      IF slug = 'submitted' THEN
+        chosen_raw_status := (ARRAY[
+          'Sent','Sent','Sent','Sent','Transmit','Accepted','Print',
+          'Claim in Process','Claim Pending'
+        ])[1 + (floor(random() * 9))::integer];
+      ELSIF slug = 'denial_management' THEN
+        chosen_raw_status := (ARRAY[
+          'Denied','Denied','Denied','Denied','Denied',
+          'Recoup','Failed','Reversed Duplicate Claim','Ovrpymt'
+        ])[1 + (floor(random() * 9))::integer];
+      ELSIF slug = 'appeals' THEN
+        IF random() < 0.88 THEN chosen_raw_status := 'Appeal Sent';
+        ELSE chosen_raw_status := 'Medical Records Sent'; END IF;
+      ELSIF slug = 'ar_follow_up' THEN
+        chosen_raw_status := (ARRAY[
+          'A/R Corrected Claim Sent','A/R Insurance Reprocessing','Resubmit',
+          'A/R Follow Up Needed','A/R Kari F/U Needed'
+        ])[1 + (floor(random() * 5))::integer];
+      ELSIF slug = 'collections'     THEN chosen_raw_status := 'Collections';
+      ELSIF slug = 'on_hold'         THEN chosen_raw_status := 'Hold';
+      ELSIF slug = 'payment_posting' THEN chosen_raw_status := 'Payment Posting Pending';
+      END IF;
+
+      -- §3: denial_category + denial_appealable (denial_management only)
+      IF slug = 'denial_management' THEN
+        IF random() < 0.70 THEN
+          chosen_denial_cat := (ARRAY[
+            '3831CA - Contractual','3831CA - Contractual','3831CA - Processing',
+            'Duplicate','Non-Covered Service','Exceeds Frequency',
+            'Bad Debt','Same/Similar','Rent or Purchase Guidelines','In Facility'
+          ])[1 + (floor(random() * 10))::integer];
+          chosen_appealable := false;
+        ELSE
+          chosen_denial_cat := (ARRAY[
+            'No Authorization','Not Medically Necessary','Beyond Filing Limit',
+            'No Documentation to Support','Incorrect Insurance Billed'
+          ])[1 + (floor(random() * 5))::integer];
+          chosen_appealable := true;
+        END IF;
+      ELSE
+        chosen_denial_cat  := NULL;
+        chosen_appealable  := NULL;
+      END IF;
+
       patient_name :=
         first_names[1 + (floor(random() * fn_len))::integer]
         || ' ' ||
         last_names[1  + (floor(random() * ln_len))::integer];
 
-      -- Spread created_at over the last 90 days
-      created_ts := now() - ((floor(random() * 90))::text || ' days')::interval
-                          - ((floor(random() * 8))::text  || ' hours')::interval;
-      updated_ts := created_ts + ((floor(random() * chosen_days))::text || ' days')::interval;
+      created_ts := now()
+        - ((floor(random() * 90))::text || ' days')::interval
+        - ((floor(random() * 8))::text  || ' hours')::interval;
+      updated_ts := created_ts
+        + ((floor(random() * chosen_days))::text || ' days')::interval;
 
       INSERT INTO work_items (
         client_id, patient_fake_name, current_stage, status,
-        assigned_to, value, days_in_stage, created_at, updated_at
+        assigned_to, value, days_in_stage, created_at, updated_at,
+        raw_status, denial_category, denial_appealable
       ) VALUES (
         chosen_client, patient_name, slug, chosen_status,
-        chosen_staff, chosen_value, chosen_days, created_ts, updated_ts
+        chosen_staff, chosen_value, chosen_days, created_ts, updated_ts,
+        chosen_raw_status, chosen_denial_cat, chosen_appealable
       )
       RETURNING id INTO new_item_id;
 
-      -- Activity log entry for every non-pending item
       IF chosen_status != 'pending' THEN
-
-        -- Pick a random staff member from this stage to be the actor
         SELECT s.id INTO actor_id_val
         FROM staff s
         JOIN teams t ON t.id = s.team_id
-        WHERE t.slug = stage_slugs[i]
+        WHERE t.slug = slug
         ORDER BY random()
         LIMIT 1;
 
         IF actor_id_val IS NOT NULL THEN
           INSERT INTO activity_log (work_item_id, actor_id, action, from_value, to_value, created_at)
-          VALUES (
-            new_item_id,
-            actor_id_val,
-            'status_changed',
-            'pending',
-            chosen_status,
-            created_ts + interval '2 hours'
-          );
+          VALUES (new_item_id, actor_id_val, 'status_changed', 'pending', chosen_status,
+                  created_ts + interval '2 hours');
         END IF;
 
-        -- ~30% of non-pending items also have a reassignment entry
         IF random() < 0.30 AND staff_len > 1 THEN
           INSERT INTO activity_log (work_item_id, actor_id, action, from_value, to_value, created_at)
-          VALUES (
-            new_item_id,
-            actor_id_val,
-            'reassigned',
-            'unassigned',
-            patient_name,   -- storing patient ref as context
-            created_ts + interval '4 hours'
-          );
+          VALUES (new_item_id, actor_id_val, 'reassigned', 'unassigned', patient_name,
+                  created_ts + interval '4 hours');
         END IF;
-
       END IF;
 
-    END LOOP; -- j
-  END LOOP;   -- i
-
+    END LOOP;
+  END LOOP;
 END;
 $$;
 
 
 -- ──────────────────────────────────────────────────────────
+-- 10. SEED DATA — PAYMENTS (Collections MTD for Pipeline KPI)
+-- ──────────────────────────────────────────────────────────
+
+INSERT INTO payments (amount, adjustment, paid_at)
+SELECT
+  (300 + (random() * 4700))::numeric(10,2),
+  (random() * 500)::numeric(10,2),
+  now() - ((random() * 60)::text || ' days')::interval
+FROM generate_series(1, 120);
+
+
+-- ──────────────────────────────────────────────────────────
 -- DONE.
--- Tables created:  teams, staff, clients, work_items, activity_log
--- Seed rows:       11 teams, 20 clients, 50 staff, ~505 work items, ~300 activity log entries
--- RLS:             enabled on all 5 tables, 14 policies
--- Triggers:        set_updated_at, link_auth_to_staff
+-- Tables:     teams, staff, clients, work_items, payments, activity_log
+-- Seed rows:  7 teams, 20 clients, 50 staff, ~465 work items,
+--             120 payment records, ~280 activity log entries
+-- RLS:        enabled on all 6 tables
+-- Triggers:   set_updated_at, link_auth_to_staff
 --
 -- NEXT STEP: Create 5 auth users in Supabase Dashboard →
 -- Authentication → Users → Add user:
 --
 --   manager@demo.rcm           Demo1234!   Manager
---   lead.eligibility@demo.rcm  Demo1234!   Team Lead, Eligibility
---   lead.coding@demo.rcm       Demo1234!   Team Lead, Coding
+--   lead.eligibility@demo.rcm  Demo1234!   Team Lead, Submitted
+--   lead.coding@demo.rcm       Demo1234!   Team Lead, Denial Management
 --   senior.ar@demo.rcm         Demo1234!   Senior Associate, AR Follow-Up
---   assoc.charge@demo.rcm      Demo1234!   Associate, Charge Entry
+--   assoc.charge@demo.rcm      Demo1234!   Associate, Submitted
 --
--- The trigger will auto-link them to their staff records on creation.
+-- The trigger auto-links them to their staff records on creation.
 -- ──────────────────────────────────────────────────────────

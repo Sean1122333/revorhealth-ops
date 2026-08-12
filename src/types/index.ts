@@ -34,7 +34,11 @@ export interface WorkItem {
   days_in_stage: number;
   created_at: string;
   updated_at: string;
-  // Joined relations (no FK from work_items → teams; team is via staff)
+  // §2 / §3 blueprint fields
+  raw_status?: string | null;
+  denial_category?: string | null;
+  denial_appealable?: boolean | null;
+  // Joined relations
   clients?: { name: string } | null;
   assigned_staff?: { full_name: string } | null;
 }
@@ -49,53 +53,44 @@ export interface ActivityLog {
   created_at: string;
 }
 
-// Real stage slugs from work_items.current_stage, in workflow order
+// ── 7 stages matching Blueprint §1 ────────────────────────────
+// Order: workflow progression left-to-right on kanban
+// Terminal (rightmost): payment_posting — claim resolved, excluded from open queues
 export const STAGE_ORDER = [
-  'eligibility',
-  'charge_entry',
-  'coding',
-  'claims_submission',
-  'payment_posting',
-  'ar_follow_up',
+  'submitted',
   'denial_management',
   'appeals',
-  'patient_collections',
-  'credentialing',
-  'reporting',
+  'ar_follow_up',
+  'collections',
+  'on_hold',
+  'payment_posting',
 ] as const;
 
 export type Stage = (typeof STAGE_ORDER)[number];
 
 export const STAGE_LABELS: Record<string, string> = {
-  eligibility:        'Eligibility',
-  charge_entry:       'Charge Entry',
-  coding:             'Coding',
-  claims_submission:  'Claims Submission',
-  payment_posting:    'Payment Posting',
-  ar_follow_up:       'AR Follow-Up',
-  denial_management:  'Denial Management',
-  appeals:            'Appeals',
-  patient_collections:'Patient Collections',
-  credentialing:      'Credentialing',
-  reporting:          'Reporting',
+  submitted:         'Submitted',
+  denial_management: 'Denial Management',
+  appeals:           'Appeals',
+  ar_follow_up:      'AR Follow-Up',
+  collections:       'Collections',
+  on_hold:           'On Hold',
+  payment_posting:   'Payment Posting',
 };
 
 export const STAGE_COLORS: Record<string, string> = {
-  eligibility:        'bg-blue-100 text-blue-700',
-  charge_entry:       'bg-violet-100 text-violet-700',
-  coding:             'bg-indigo-100 text-indigo-700',
-  claims_submission:  'bg-cyan-100 text-cyan-700',
-  payment_posting:    'bg-green-100 text-green-700',
-  ar_follow_up:       'bg-sky-100 text-sky-700',
-  denial_management:  'bg-red-100 text-red-700',
-  appeals:            'bg-orange-100 text-orange-700',
-  patient_collections:'bg-purple-100 text-purple-700',
-  credentialing:      'bg-teal-100 text-teal-700',
-  reporting:          'bg-gray-100 text-gray-600',
+  submitted:         'bg-blue-100 text-blue-700',
+  denial_management: 'bg-red-100 text-red-700',
+  appeals:           'bg-orange-100 text-orange-700',
+  ar_follow_up:      'bg-sky-100 text-sky-700',
+  collections:       'bg-purple-100 text-purple-700',
+  on_hold:           'bg-amber-100 text-amber-700',
+  payment_posting:   'bg-green-100 text-green-700',
 };
 
-// Terminal stage — equivalent to "closed" in RCM workflow
-export const TERMINAL_STAGE = 'reporting';
+// Terminal stage: payment posted = claim resolved
+// Items in this stage are excluded from open queues (MyQueue, TeamQueue)
+export const TERMINAL_STAGE = 'payment_posting';
 
 export function getNextStage(current: string): string | null {
   const idx = STAGE_ORDER.indexOf(current as Stage);

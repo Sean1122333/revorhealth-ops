@@ -18,9 +18,9 @@ function computeKpis(items: WorkItem[]) {
     return { cleanRate: 0, denialRate: 0, arBuckets: [] as { label: string; count: number }[], collectionsMtd: 0 };
   }
 
-  // Positive = items that reached payment or beyond without denial
-  const POSITIVE = new Set(['payment_posting', 'patient_collections', 'reporting']);
-  // Denial = items currently in dispute stages
+  // Positive = payment posted (claim resolved)
+  const POSITIVE = new Set(['payment_posting']);
+  // Denial = items in dispute stages
   const DENIAL = new Set(['denial_management', 'appeals']);
 
   const cleanRate = Math.round((items.filter(i => POSITIVE.has(i.current_stage)).length / total) * 100);
