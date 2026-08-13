@@ -8,6 +8,7 @@ import {
   STAGE_ORDER,
   TERMINAL_STAGE,
   getNextStage,
+  SERVICE_LINE_COLORS,
 } from '../types';
 import { ChevronRight, RefreshCw } from 'lucide-react';
 
@@ -133,6 +134,7 @@ export default function MyQueue() {
               <tr className="border-b border-slate-100">
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Patient</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Client</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Service Line</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Stage</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Value</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Days in Stage</th>
@@ -149,6 +151,13 @@ export default function MyQueue() {
                       <div className="font-medium text-slate-800">{item.patient_fake_name}</div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{item.clients?.name ?? '—'}</td>
+                    <td className="px-4 py-3">
+                      {item.service_line ? (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${SERVICE_LINE_COLORS[item.service_line] ?? 'bg-slate-100 text-slate-500'}`}>
+                          {item.service_line}
+                        </span>
+                      ) : <span className="text-slate-300">—</span>}
+                    </td>
                     <td className="px-4 py-3">
                       <StageBadge stage={item.current_stage} />
                     </td>

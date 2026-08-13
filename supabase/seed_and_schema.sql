@@ -54,18 +54,20 @@ CREATE TABLE work_items (
   -- Blueprint §3: denial sub-classification (denial_management only)
   denial_category    text,
   denial_appealable  boolean,
+  -- Service line dimension (derived from patient_team on real import)
+  service_line       text CHECK (service_line IN ('CPAP','Respiratory','Retail','Intake','Other')),
   created_at         timestamptz   NOT NULL DEFAULT now(),
   updated_at         timestamptz   NOT NULL DEFAULT now()
 );
 
 CREATE TABLE payments (
-  id          uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
-  work_item_id uuid         REFERENCES work_items(id) ON DELETE SET NULL,
-  amount      numeric(10,2) NOT NULL DEFAULT 0,
-  adjustment  numeric(10,2) NOT NULL DEFAULT 0,
-  tax         numeric(10,2) NOT NULL DEFAULT 0,
-  paid_at     timestamptz   NOT NULL DEFAULT now(),
-  created_at  timestamptz   NOT NULL DEFAULT now()
+  id           uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+  work_item_id uuid          REFERENCES work_items(id) ON DELETE SET NULL,
+  amount       numeric(10,2) NOT NULL DEFAULT 0,
+  adjustment   numeric(10,2) NOT NULL DEFAULT 0,
+  tax          numeric(10,2) NOT NULL DEFAULT 0,
+  paid_at      timestamptz   NOT NULL DEFAULT now(),
+  created_at   timestamptz   NOT NULL DEFAULT now()
 );
 
 CREATE TABLE activity_log (
@@ -91,6 +93,7 @@ CREATE INDEX idx_work_stage        ON work_items(current_stage);
 CREATE INDEX idx_work_assigned     ON work_items(assigned_to);
 CREATE INDEX idx_work_status       ON work_items(status);
 CREATE INDEX idx_work_client       ON work_items(client_id);
+CREATE INDEX idx_work_service_line ON work_items(service_line);
 CREATE INDEX idx_work_created      ON work_items(created_at);
 CREATE INDEX idx_activity_item     ON activity_log(work_item_id);
 CREATE INDEX idx_activity_actor    ON activity_log(actor_id);
@@ -122,7 +125,6 @@ SET search_path = public AS $$
   SELECT team_id FROM staff WHERE auth_user_id = auth.uid()
 $$;
 
--- Returns the slug of the calling user's team (used in work_items policies).
 CREATE OR REPLACE FUNCTION current_staff_team_slug()
 RETURNS text LANGUAGE sql SECURITY DEFINER STABLE
 SET search_path = public AS $$
@@ -149,7 +151,6 @@ CREATE TRIGGER trg_work_items_updated_at
 BEFORE UPDATE ON work_items
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Link Supabase Auth user to pre-seeded staff record on creation.
 CREATE OR REPLACE FUNCTION link_auth_to_staff()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public AS $$
@@ -180,13 +181,11 @@ ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;
 
 -- ── teams ────────────────────────────────────────────────
 CREATE POLICY "teams: authenticated read"
-ON teams FOR SELECT
-USING (current_staff_id() IS NOT NULL);
+ON teams FOR SELECT USING (current_staff_id() IS NOT NULL);
 
 -- ── staff ────────────────────────────────────────────────
 CREATE POLICY "staff: read own row"
-ON staff FOR SELECT
-USING (auth_user_id = auth.uid());
+ON staff FOR SELECT USING (auth_user_id = auth.uid());
 
 CREATE POLICY "staff: read own team"
 ON staff FOR SELECT
@@ -196,21 +195,16 @@ USING (
 );
 
 CREATE POLICY "staff: manager read all"
-ON staff FOR SELECT
-USING (current_staff_role() = 'manager');
+ON staff FOR SELECT USING (current_staff_role() = 'manager');
 
 -- ── clients ──────────────────────────────────────────────
 CREATE POLICY "clients: authenticated read"
-ON clients FOR SELECT
-USING (current_staff_id() IS NOT NULL);
+ON clients FOR SELECT USING (current_staff_id() IS NOT NULL);
 
 -- ── work_items ───────────────────────────────────────────
 CREATE POLICY "work_items: associate read assigned"
 ON work_items FOR SELECT
-USING (
-  current_staff_role() = 'associate'
-  AND assigned_to = current_staff_id()
-);
+USING (current_staff_role() = 'associate' AND assigned_to = current_staff_id());
 
 CREATE POLICY "work_items: team read by stage"
 ON work_items FOR SELECT
@@ -220,41 +214,22 @@ USING (
 );
 
 CREATE POLICY "work_items: manager read all"
-ON work_items FOR SELECT
-USING (current_staff_role() = 'manager');
+ON work_items FOR SELECT USING (current_staff_role() = 'manager');
 
 CREATE POLICY "work_items: associate update assigned"
 ON work_items FOR UPDATE
-USING (
-  current_staff_role() = 'associate'
-  AND assigned_to = current_staff_id()
-)
-WITH CHECK (
-  current_staff_role() = 'associate'
-  AND assigned_to = current_staff_id()
-);
+USING (current_staff_role() = 'associate' AND assigned_to = current_staff_id())
+WITH CHECK (current_staff_role() = 'associate' AND assigned_to = current_staff_id());
 
 CREATE POLICY "work_items: senior_associate update stage"
 ON work_items FOR UPDATE
-USING (
-  current_staff_role() = 'senior_associate'
-  AND current_stage = current_staff_team_slug()
-)
-WITH CHECK (
-  current_staff_role() = 'senior_associate'
-  AND current_stage = current_staff_team_slug()
-);
+USING (current_staff_role() = 'senior_associate' AND current_stage = current_staff_team_slug())
+WITH CHECK (current_staff_role() = 'senior_associate' AND current_stage = current_staff_team_slug());
 
 CREATE POLICY "work_items: team_lead update stage"
 ON work_items FOR UPDATE
-USING (
-  current_staff_role() = 'team_lead'
-  AND current_stage = current_staff_team_slug()
-)
-WITH CHECK (
-  current_staff_role() = 'team_lead'
-  AND current_stage = current_staff_team_slug()
-);
+USING (current_staff_role() = 'team_lead' AND current_stage = current_staff_team_slug())
+WITH CHECK (current_staff_role() = 'team_lead' AND current_stage = current_staff_team_slug());
 
 CREATE POLICY "work_items: manager update all"
 ON work_items FOR UPDATE
@@ -262,13 +237,11 @@ USING (current_staff_role() = 'manager')
 WITH CHECK (current_staff_role() = 'manager');
 
 CREATE POLICY "work_items: manager insert"
-ON work_items FOR INSERT
-WITH CHECK (current_staff_role() = 'manager');
+ON work_items FOR INSERT WITH CHECK (current_staff_role() = 'manager');
 
 -- ── payments ─────────────────────────────────────────────
 CREATE POLICY "payments: authenticated read"
-ON payments FOR SELECT
-USING (current_staff_id() IS NOT NULL);
+ON payments FOR SELECT USING (current_staff_id() IS NOT NULL);
 
 -- ── activity_log ─────────────────────────────────────────
 CREATE POLICY "activity_log: team_lead read stage"
@@ -276,21 +249,16 @@ ON activity_log FOR SELECT
 USING (
   current_staff_role() = 'team_lead'
   AND work_item_id IN (
-    SELECT id FROM work_items
-    WHERE current_stage = current_staff_team_slug()
+    SELECT id FROM work_items WHERE current_stage = current_staff_team_slug()
   )
 );
 
 CREATE POLICY "activity_log: manager read all"
-ON activity_log FOR SELECT
-USING (current_staff_role() = 'manager');
+ON activity_log FOR SELECT USING (current_staff_role() = 'manager');
 
 CREATE POLICY "activity_log: insert own actions"
 ON activity_log FOR INSERT
-WITH CHECK (
-  actor_id = current_staff_id()
-  AND current_staff_id() IS NOT NULL
-);
+WITH CHECK (actor_id = current_staff_id() AND current_staff_id() IS NOT NULL);
 
 
 -- ──────────────────────────────────────────────────────────
@@ -298,13 +266,13 @@ WITH CHECK (
 -- ──────────────────────────────────────────────────────────
 
 INSERT INTO teams (name, slug, display_order) VALUES
-  ('Submitted Claims',   'submitted',         1),
-  ('Payment Posting',    'payment_posting',    2),
-  ('Denial Management',  'denial_management',  3),
-  ('Appeals',            'appeals',            4),
-  ('AR Follow-Up',       'ar_follow_up',       5),
-  ('Collections',        'collections',        6),
-  ('On Hold',            'on_hold',            7);
+  ('Submitted Claims',  'submitted',         1),
+  ('Payment Posting',   'payment_posting',   2),
+  ('Denial Management', 'denial_management', 3),
+  ('Appeals',           'appeals',           4),
+  ('AR Follow-Up',      'ar_follow_up',      5),
+  ('Collections',       'collections',       6),
+  ('On Hold',           'on_hold',           7);
 
 
 -- ──────────────────────────────────────────────────────────
@@ -412,21 +380,20 @@ INSERT INTO staff (full_name, email, role, team_id)
 
 -- ──────────────────────────────────────────────────────────
 -- 9. SEED DATA — WORK ITEMS + ACTIVITY LOG (~465 items)
--- 7 stages, §2 raw_status, §3 denial_category/appealable
+-- 7 stages · §2 raw_status · §3 denial fields · service_line
+-- NOTE: loop variable is v_slug (not slug) to avoid PostgreSQL
+-- "column reference ambiguous" error with teams.slug in JOINs.
 -- ──────────────────────────────────────────────────────────
 
 DO $$
 DECLARE
-  -- Stage config in STAGE_ORDER (matches src/types/index.ts)
   stage_slugs   text[]    := ARRAY[
     'submitted','denial_management','appeals',
     'ar_follow_up','collections','on_hold','payment_posting'
   ];
   stage_counts  integer[] := ARRAY[150, 120, 55, 70, 20, 15, 35];
-  -- Claim value ranges per stage (denial/appeals higher = contested amounts)
   stage_min_val numeric[]  := ARRAY[200,  500,  800,  400, 150, 100, 300];
   stage_max_val numeric[]  := ARRAY[1500, 8000, 12000, 6000, 2000, 3000, 5000];
-  -- Days-in-stage ranges (aging increases as claims sit)
   stage_min_days integer[] := ARRAY[1, 10, 15, 5, 30, 5, 1];
   stage_max_days integer[] := ARRAY[5, 50, 70, 40, 95, 30, 5];
 
@@ -445,41 +412,43 @@ DECLARE
     'White','Harris','Sanchez','Clark','Ramirez','Lewis','Robinson'
   ];
 
-  client_ids        uuid[];
-  stage_staff       uuid[];
-  i                 integer;
-  j                 integer;
-  slug              text;
-  item_count        integer;
-  new_item_id       uuid;
-  chosen_client     uuid;
-  chosen_staff      uuid;
-  chosen_status     text;
-  chosen_value      numeric;
-  chosen_days       integer;
-  chosen_raw_status text;
-  chosen_denial_cat text;
-  chosen_appealable boolean;
-  patient_name      text;
-  created_ts        timestamptz;
-  updated_ts        timestamptz;
-  actor_id_val      uuid;
-  rnd               float;
-  fn_len            integer := 42;
-  ln_len            integer := 30;
-  staff_len         integer;
+  client_ids          uuid[];
+  stage_staff         uuid[];
+  i                   integer;
+  j                   integer;
+  v_slug              text;      -- NOT slug — avoids ambiguity with teams.slug
+  item_count          integer;
+  new_item_id         uuid;
+  chosen_client       uuid;
+  chosen_staff        uuid;
+  chosen_status       text;
+  chosen_value        numeric;
+  chosen_days         integer;
+  chosen_raw_status   text;
+  chosen_denial_cat   text;
+  chosen_appealable   boolean;
+  chosen_service_line text;
+  patient_name        text;
+  created_ts          timestamptz;
+  updated_ts          timestamptz;
+  actor_id_val        uuid;
+  rnd                 float;
+  fn_len              integer := 42;
+  ln_len              integer := 30;
+  staff_len           integer;
 
 BEGIN
   SELECT ARRAY(SELECT id FROM clients ORDER BY random()) INTO client_ids;
 
   FOR i IN 1..array_length(stage_slugs, 1) LOOP
-    slug       := stage_slugs[i];
+    v_slug     := stage_slugs[i];
     item_count := stage_counts[i];
 
     SELECT ARRAY(
       SELECT s.id FROM staff s
       JOIN teams t ON t.id = s.team_id
-      WHERE t.slug = slug AND s.role IN ('associate','senior_associate')
+      WHERE t.slug = v_slug
+        AND s.role IN ('associate','senior_associate')
     ) INTO stage_staff;
     staff_len := COALESCE(array_length(stage_staff, 1), 0);
 
@@ -493,6 +462,7 @@ BEGIN
         chosen_staff := NULL;
       END IF;
 
+      -- Item status
       rnd := random();
       chosen_status := CASE
         WHEN rnd < 0.28 THEN 'pending'
@@ -502,38 +472,48 @@ BEGIN
         ELSE                  'on_hold'
       END;
 
+      -- Service line: CPAP ~65%, Respiratory ~10%, Retail ~12%, Intake ~8%, Other ~5%
+      rnd := random();
+      chosen_service_line := CASE
+        WHEN rnd < 0.65 THEN 'CPAP'
+        WHEN rnd < 0.75 THEN 'Respiratory'
+        WHEN rnd < 0.87 THEN 'Retail'
+        WHEN rnd < 0.95 THEN 'Intake'
+        ELSE                  'Other'
+      END;
+
       chosen_value := stage_min_val[i]
         + (floor(random() * (stage_max_val[i] - stage_min_val[i])))::numeric;
 
       chosen_days := stage_min_days[i]
         + (floor(random() * (stage_max_days[i] - stage_min_days[i])))::integer;
 
-      -- §2: raw_status — plausible claim_status values per stage
-      IF slug = 'submitted' THEN
+      -- §2: raw_status
+      IF v_slug = 'submitted' THEN
         chosen_raw_status := (ARRAY[
           'Sent','Sent','Sent','Sent','Transmit','Accepted','Print',
           'Claim in Process','Claim Pending'
         ])[1 + (floor(random() * 9))::integer];
-      ELSIF slug = 'denial_management' THEN
+      ELSIF v_slug = 'denial_management' THEN
         chosen_raw_status := (ARRAY[
           'Denied','Denied','Denied','Denied','Denied',
           'Recoup','Failed','Reversed Duplicate Claim','Ovrpymt'
         ])[1 + (floor(random() * 9))::integer];
-      ELSIF slug = 'appeals' THEN
+      ELSIF v_slug = 'appeals' THEN
         IF random() < 0.88 THEN chosen_raw_status := 'Appeal Sent';
         ELSE chosen_raw_status := 'Medical Records Sent'; END IF;
-      ELSIF slug = 'ar_follow_up' THEN
+      ELSIF v_slug = 'ar_follow_up' THEN
         chosen_raw_status := (ARRAY[
           'A/R Corrected Claim Sent','A/R Insurance Reprocessing','Resubmit',
           'A/R Follow Up Needed','A/R Kari F/U Needed'
         ])[1 + (floor(random() * 5))::integer];
-      ELSIF slug = 'collections'     THEN chosen_raw_status := 'Collections';
-      ELSIF slug = 'on_hold'         THEN chosen_raw_status := 'Hold';
-      ELSIF slug = 'payment_posting' THEN chosen_raw_status := 'Payment Posting Pending';
+      ELSIF v_slug = 'collections'     THEN chosen_raw_status := 'Collections';
+      ELSIF v_slug = 'on_hold'         THEN chosen_raw_status := 'Hold';
+      ELSIF v_slug = 'payment_posting' THEN chosen_raw_status := 'Payment Posting Pending';
       END IF;
 
-      -- §3: denial_category + denial_appealable (denial_management only)
-      IF slug = 'denial_management' THEN
+      -- §3: denial_category + denial_appealable
+      IF v_slug = 'denial_management' THEN
         IF random() < 0.70 THEN
           chosen_denial_cat := (ARRAY[
             '3831CA - Contractual','3831CA - Contractual','3831CA - Processing',
@@ -567,11 +547,11 @@ BEGIN
       INSERT INTO work_items (
         client_id, patient_fake_name, current_stage, status,
         assigned_to, value, days_in_stage, created_at, updated_at,
-        raw_status, denial_category, denial_appealable
+        raw_status, denial_category, denial_appealable, service_line
       ) VALUES (
-        chosen_client, patient_name, slug, chosen_status,
+        chosen_client, patient_name, v_slug, chosen_status,
         chosen_staff, chosen_value, chosen_days, created_ts, updated_ts,
-        chosen_raw_status, chosen_denial_cat, chosen_appealable
+        chosen_raw_status, chosen_denial_cat, chosen_appealable, chosen_service_line
       )
       RETURNING id INTO new_item_id;
 
@@ -579,7 +559,7 @@ BEGIN
         SELECT s.id INTO actor_id_val
         FROM staff s
         JOIN teams t ON t.id = s.team_id
-        WHERE t.slug = slug
+        WHERE t.slug = v_slug
         ORDER BY random()
         LIMIT 1;
 

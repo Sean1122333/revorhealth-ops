@@ -38,6 +38,7 @@ export interface WorkItem {
   raw_status?: string | null;
   denial_category?: string | null;
   denial_appealable?: boolean | null;
+  service_line?: string | null;
   // Joined relations
   clients?: { name: string } | null;
   assigned_staff?: { full_name: string } | null;
@@ -101,3 +102,13 @@ export function getNextStage(current: string): string | null {
 export function daysOpen(createdAt: string): number {
   return Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000);
 }
+
+export type ServiceLine = 'CPAP' | 'Respiratory' | 'Retail' | 'Intake' | 'Other';
+
+export const SERVICE_LINE_COLORS: Record<string, string> = {
+  CPAP:        'bg-teal-100 text-teal-700',
+  Respiratory: 'bg-sky-100 text-sky-700',
+  Retail:      'bg-violet-100 text-violet-700',
+  Intake:      'bg-amber-100 text-amber-700',
+  Other:       'bg-slate-100 text-slate-500',
+};

@@ -8,7 +8,10 @@ import {
   STAGE_ORDER,
   TERMINAL_STAGE,
   getNextStage,
+  SERVICE_LINE_COLORS,
 } from '../types';
+
+const SERVICE_LINES = ['CPAP', 'Respiratory', 'Retail', 'Intake', 'Other'] as const;
 import { RefreshCw, TrendingUp, TrendingDown, Clock, DollarSign, ChevronRight } from 'lucide-react';
 
 // ── KPI helpers ────────────────────────────────────────────────────────────
@@ -93,6 +96,11 @@ function KanbanCard({ item, onAdvance, advancing }: {
         </div>
       </div>
       <div className="mt-1.5 text-[11px] text-slate-500 truncate">{item.clients?.name ?? '—'}</div>
+      {item.service_line && (
+        <span className={`mt-1 inline-flex px-1.5 py-0.5 rounded text-[9px] font-medium ${SERVICE_LINE_COLORS[item.service_line] ?? 'bg-slate-100 text-slate-500'}`}>
+          {item.service_line}
+        </span>
+      )}
       <div className="mt-2 flex items-center justify-between">
         <span className="text-xs font-semibold text-slate-700">
           ${(item.value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
@@ -127,6 +135,7 @@ export default function Pipeline() {
   const [collectionsMtd, setCollectionsMtd] = useState(0);
   const [loading, setLoading] = useState(true);
   const [advancing, setAdvancing] = useState<string | null>(null);
+  const [serviceLineFilter, setServiceLineFilter] = useState('');
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -182,19 +191,24 @@ export default function Pipeline() {
 
   const { cleanRate, denialRate, arBuckets } = computeKpis(items);
 
+  // Apply service_line filter before grouping into columns
+  const displayItems = serviceLineFilter
+    ? items.filter(i => i.service_line === serviceLineFilter)
+    : items;
+
   // Group by stage — STAGE_ORDER defines column order
   const byStage = STAGE_ORDER.map(stage => ({
     stage,
     label: STAGE_LABELS[stage],
-    items: items.filter(i => i.current_stage === stage),
+    items: displayItems.filter(i => i.current_stage === stage),
   }));
 
   // Catch any stages in DB not in STAGE_ORDER (shouldn't happen, but safe)
   const knownStages = new Set(STAGE_ORDER as readonly string[]);
-  const unknownStages = [...new Set(items.map(i => i.current_stage))].filter(s => !knownStages.has(s));
+  const unknownStages = [...new Set(displayItems.map(i => i.current_stage))].filter(s => !knownStages.has(s));
   const allColumns = [
     ...byStage,
-    ...unknownStages.map(stage => ({ stage, label: stage, items: items.filter(i => i.current_stage === stage) })),
+    ...unknownStages.map(stage => ({ stage, label: stage, items: displayItems.filter(i => i.current_stage === stage) })),
   ];
 
   return (
@@ -204,16 +218,28 @@ export default function Pipeline() {
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Pipeline</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            {items.length} total claims · {items.filter(i => i.current_stage !== TERMINAL_STAGE).length} open
+            {displayItems.length}{serviceLineFilter ? ` ${serviceLineFilter}` : ''} claims · {displayItems.filter(i => i.current_stage !== TERMINAL_STAGE).length} open
           </p>
         </div>
-        <button
-          onClick={fetchItems}
-          className="flex items-center gap-1.5 text-slate-400 hover:text-slate-600 text-sm transition-colors"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <select
+            value={serviceLineFilter}
+            onChange={e => setServiceLineFilter(e.target.value)}
+            className="text-sm border border-slate-200 rounded-md px-3 py-1.5 text-slate-600 bg-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+          >
+            <option value="">All service lines</option>
+            {SERVICE_LINES.map(sl => (
+              <option key={sl} value={sl}>{sl}</option>
+            ))}
+          </select>
+          <button
+            onClick={fetchItems}
+            className="flex items-center gap-1.5 text-slate-400 hover:text-slate-600 text-sm transition-colors"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* KPI cards */}
