@@ -132,7 +132,7 @@ export default function MyQueue() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100">
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Patient</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Invoice Ref</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Client</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Service Line</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Stage</th>
@@ -148,7 +148,7 @@ export default function MyQueue() {
                 return (
                   <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-slate-800">{item.patient_fake_name}</div>
+                      <div className="font-medium text-slate-800">{item.invoice_ref ?? '—'}</div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{item.clients?.name ?? '—'}</td>
                     <td className="px-4 py-3">

@@ -89,7 +89,7 @@ function KanbanCard({ item, onAdvance, advancing }: {
     <div className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="font-medium text-slate-800 text-xs truncate">{item.patient_fake_name}</div>
+          <div className="font-medium text-slate-800 text-xs truncate">{item.invoice_ref ?? '—'}</div>
         </div>
         <div className={`text-[10px] font-medium shrink-0 ${days > 10 ? 'text-red-500' : days > 5 ? 'text-amber-500' : 'text-slate-400'}`}>
           {days}d

@@ -205,7 +205,7 @@ export default function TeamQueue() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100">
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Patient</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Invoice Ref</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Assigned To</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Client</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Service Line</th>
@@ -221,7 +221,7 @@ export default function TeamQueue() {
                 const days = item.days_in_stage ?? 0;
                 return (
                   <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="px-4 py-3 font-medium text-slate-800">{item.patient_fake_name}</td>
+                    <td className="px-4 py-3 font-medium text-slate-800">{item.invoice_ref ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-600 text-xs">
                       {item.assigned_staff?.full_name ?? '—'}
                     </td>

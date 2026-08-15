@@ -54,6 +54,8 @@ CREATE TABLE work_items (
   -- Blueprint §3: denial sub-classification (denial_management only)
   denial_category    text,
   denial_appealable  boolean,
+  -- Invoice/claim reference — maps to invoice_number on real import. NO PHI.
+  invoice_ref        text          UNIQUE,
   -- Service line dimension (derived from patient_team on real import)
   service_line       text CHECK (service_line IN ('CPAP','Respiratory','Retail','Intake','Other')),
   created_at         timestamptz   NOT NULL DEFAULT now(),
@@ -432,6 +434,8 @@ DECLARE
   created_ts          timestamptz;
   updated_ts          timestamptz;
   actor_id_val        uuid;
+  inv_counter         integer := 100001;
+  invoice_ref_val     text;
   rnd                 float;
   fn_len              integer := 42;
   ln_len              integer := 30;
@@ -533,6 +537,9 @@ BEGIN
         chosen_appealable  := NULL;
       END IF;
 
+      invoice_ref_val := 'INV-' || LPAD(inv_counter::text, 6, '0');
+      inv_counter := inv_counter + 1;
+
       patient_name :=
         first_names[1 + (floor(random() * fn_len))::integer]
         || ' ' ||
@@ -545,11 +552,11 @@ BEGIN
         + ((floor(random() * chosen_days))::text || ' days')::interval;
 
       INSERT INTO work_items (
-        client_id, patient_fake_name, current_stage, status,
+        client_id, patient_fake_name, invoice_ref, current_stage, status,
         assigned_to, value, days_in_stage, created_at, updated_at,
         raw_status, denial_category, denial_appealable, service_line
       ) VALUES (
-        chosen_client, patient_name, v_slug, chosen_status,
+        chosen_client, patient_name, invoice_ref_val, v_slug, chosen_status,
         chosen_staff, chosen_value, chosen_days, created_ts, updated_ts,
         chosen_raw_status, chosen_denial_cat, chosen_appealable, chosen_service_line
       )

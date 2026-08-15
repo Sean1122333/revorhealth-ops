@@ -23,10 +23,18 @@ export interface Client {
   type: string;
 }
 
+/**
+ * Operational metadata only — NO PHI.
+ * Patient identifiers (name, DOB, MRN, address, insurance ID, diagnosis codes)
+ * must never be imported into this database.
+ */
 export interface WorkItem {
   id: string;
   client_id: string;
+  /** Dummy data only — never rendered in UI, never populated from real data. */
   patient_fake_name: string;
+  /** Invoice/claim reference (e.g. 'INV-100001'). Maps to invoice_number on import. */
+  invoice_ref?: string | null;
   current_stage: string;
   status: string;
   assigned_to: string;
