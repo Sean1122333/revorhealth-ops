@@ -71,7 +71,7 @@ export default function MyQueue() {
     (a, b) => STAGE_ORDER.indexOf(a as never) - STAGE_ORDER.indexOf(b as never)
   );
   const displayed = stageFilter ? items.filter(i => i.current_stage === stageFilter) : items;
-  const totalValue = items.reduce((s, i) => s + (i.value ?? 0), 0);
+  const totalValue = items.reduce((s, i) => s + (i.billed_amount ?? 0), 0);
 
   return (
     <div className="p-6">
@@ -162,7 +162,7 @@ export default function MyQueue() {
                       <StageBadge stage={item.current_stage} />
                     </td>
                     <td className="px-4 py-3 text-right text-slate-700 font-medium">
-                      ${(item.value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      ${(item.billed_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </td>
                     <td className={`px-4 py-3 text-right font-medium ${days > 10 ? 'text-red-500' : days > 5 ? 'text-amber-500' : 'text-slate-600'}`}>
                       {days}d

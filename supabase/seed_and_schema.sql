@@ -47,7 +47,8 @@ CREATE TABLE work_items (
   status             text          NOT NULL DEFAULT 'pending'
                      CHECK (status IN ('pending','in_progress','ready_for_next','completed','on_hold')),
   assigned_to        uuid          REFERENCES staff(id),
-  value              numeric(10,2) NOT NULL DEFAULT 0,
+  billed_amount      numeric(10,2) NOT NULL DEFAULT 0,
+  balance_amount     numeric(10,2) NOT NULL DEFAULT 0,
   days_in_stage      smallint      NOT NULL DEFAULT 0,
   -- Blueprint §2: raw claim_status value before stage mapping
   raw_status         text,
@@ -424,7 +425,8 @@ DECLARE
   chosen_client       uuid;
   chosen_staff        uuid;
   chosen_status       text;
-  chosen_value        numeric;
+  chosen_billed       numeric;
+  chosen_balance      numeric;
   chosen_days         integer;
   chosen_raw_status   text;
   chosen_denial_cat   text;
@@ -486,8 +488,13 @@ BEGIN
         ELSE                  'Other'
       END;
 
-      chosen_value := stage_min_val[i]
+      chosen_billed := stage_min_val[i]
         + (floor(random() * (stage_max_val[i] - stage_min_val[i])))::numeric;
+      -- balance: $0 for resolved claims; 50–100% of billed for open stages
+      chosen_balance := CASE
+        WHEN v_slug = 'payment_posting' THEN 0
+        ELSE ROUND((chosen_billed * (0.5 + random() * 0.5))::numeric, 2)
+      END;
 
       chosen_days := stage_min_days[i]
         + (floor(random() * (stage_max_days[i] - stage_min_days[i])))::integer;
@@ -553,11 +560,11 @@ BEGIN
 
       INSERT INTO work_items (
         client_id, patient_fake_name, invoice_ref, current_stage, status,
-        assigned_to, value, days_in_stage, created_at, updated_at,
+        assigned_to, billed_amount, balance_amount, days_in_stage, created_at, updated_at,
         raw_status, denial_category, denial_appealable, service_line
       ) VALUES (
         chosen_client, patient_name, invoice_ref_val, v_slug, chosen_status,
-        chosen_staff, chosen_value, chosen_days, created_ts, updated_ts,
+        chosen_staff, chosen_billed, chosen_balance, chosen_days, created_ts, updated_ts,
         chosen_raw_status, chosen_denial_cat, chosen_appealable, chosen_service_line
       )
       RETURNING id INTO new_item_id;
@@ -599,6 +606,58 @@ SELECT
   (random() * 500)::numeric(10,2),
   now() - ((random() * 60)::text || ' days')::interval
 FROM generate_series(1, 120);
+
+
+-- ──────────────────────────────────────────────────────────
+-- 11. KPI SUMMARY RPC
+-- ──────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION kpi_summary()
+RETURNS json
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  SELECT json_build_object(
+    'total',          COUNT(*),
+    'open',           COUNT(*) FILTER (WHERE current_stage <> 'payment_posting'),
+    'clean_rate',     COALESCE(
+                        ROUND(100.0
+                          * COUNT(*) FILTER (WHERE current_stage = 'payment_posting')
+                          / NULLIF(COUNT(*), 0)
+                        ), 0),
+    'denial_rate',    COALESCE(
+                        ROUND(100.0
+                          * COUNT(*) FILTER (WHERE current_stage IN ('denial_management','appeals'))
+                          / NULLIF(COUNT(*), 0)
+                        ), 0),
+    'total_billed',   COALESCE(SUM(billed_amount), 0),
+    'total_balance',  COALESCE(
+                        SUM(balance_amount) FILTER (WHERE current_stage <> 'payment_posting'),
+                        0),
+    'collections_mtd',(
+                        SELECT COALESCE(SUM(amount), 0)
+                        FROM payments
+                        WHERE paid_at >= date_trunc('month', now())
+                      ),
+    'ar_0_5',         COUNT(*) FILTER (
+                        WHERE current_stage <> 'payment_posting'
+                          AND days_in_stage BETWEEN 0 AND 5),
+    'ar_6_15',        COUNT(*) FILTER (
+                        WHERE current_stage <> 'payment_posting'
+                          AND days_in_stage BETWEEN 6 AND 15),
+    'ar_16_30',       COUNT(*) FILTER (
+                        WHERE current_stage <> 'payment_posting'
+                          AND days_in_stage BETWEEN 16 AND 30),
+    'ar_31_plus',     COUNT(*) FILTER (
+                        WHERE current_stage <> 'payment_posting'
+                          AND days_in_stage > 30)
+  )
+  FROM work_items
+$$;
+
+GRANT EXECUTE ON FUNCTION kpi_summary() TO authenticated;
 
 
 -- ──────────────────────────────────────────────────────────

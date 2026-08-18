@@ -103,7 +103,7 @@ export default function TeamQueue() {
   const avgDays = items.length
     ? Math.round(items.reduce((s, i) => s + (i.days_in_stage ?? 0), 0) / items.length)
     : 0;
-  const totalValue = items.reduce((s, i) => s + (i.value ?? 0), 0);
+  const totalValue = items.reduce((s, i) => s + (i.billed_amount ?? 0), 0);
   const bottleneckStage = (() => {
     const counts: Record<string, number> = {};
     items.forEach(i => { counts[i.current_stage] = (counts[i.current_stage] ?? 0) + 1; });
@@ -235,7 +235,7 @@ export default function TeamQueue() {
                     </td>
                     <td className="px-4 py-3"><StageBadge stage={item.current_stage} /></td>
                     <td className="px-4 py-3 text-right text-slate-700 font-medium">
-                      ${(item.value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}
+                      ${(item.billed_amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}
                     </td>
                     <td className={`px-4 py-3 text-right font-medium ${days > 10 ? 'text-red-500' : days > 5 ? 'text-amber-500' : 'text-slate-600'}`}>
                       {days}d

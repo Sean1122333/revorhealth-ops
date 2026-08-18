@@ -38,7 +38,10 @@ export interface WorkItem {
   current_stage: string;
   status: string;
   assigned_to: string;
-  value: number;
+  /** Gross billed amount sent to payer. Maps to `billed` (Schema A) / `TotalBilledAmount` (Schema B). */
+  billed_amount: number;
+  /** Remaining balance after payments/adjustments. Maps to `denial_item_balance` / `ClaimBalance`. */
+  balance_amount: number;
   days_in_stage: number;
   created_at: string;
   updated_at: string;

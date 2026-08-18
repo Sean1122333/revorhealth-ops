@@ -14,38 +14,13 @@ import {
 const SERVICE_LINES = ['CPAP', 'Respiratory', 'Retail', 'Intake', 'Other'] as const;
 import { RefreshCw, TrendingUp, TrendingDown, Clock, DollarSign, ChevronRight } from 'lucide-react';
 
-// ── KPI helpers ────────────────────────────────────────────────────────────
-function computeKpis(items: WorkItem[]) {
-  const total = items.length;
-  if (total === 0) {
-    return { cleanRate: 0, denialRate: 0, arBuckets: [] as { label: string; count: number }[], collectionsMtd: 0 };
-  }
-
-  // Positive = payment posted (claim resolved)
-  const POSITIVE = new Set(['payment_posting']);
-  // Denial = items in dispute stages
-  const DENIAL = new Set(['denial_management', 'appeals']);
-
-  const cleanRate = Math.round((items.filter(i => POSITIVE.has(i.current_stage)).length / total) * 100);
-  const denialRate = Math.round((items.filter(i => DENIAL.has(i.current_stage)).length / total) * 100);
-
-  // AR aging using days_in_stage from DB (open = not yet at terminal stage)
-  const open = items.filter(i => i.current_stage !== TERMINAL_STAGE);
-  const arBuckets = [
-    { label: '0–5d',   min: 0,  max: 5          },
-    { label: '6–15d',  min: 6,  max: 15         },
-    { label: '16–30d', min: 16, max: 30         },
-    { label: '30d+',   min: 31, max: Infinity   },
-  ].map(b => ({
-    label: b.label,
-    count: open.filter(i => {
-      const d = i.days_in_stage ?? 0;
-      return d >= b.min && d <= b.max;
-    }).length,
-  }));
-
-  return { cleanRate, denialRate, arBuckets };
-}
+// ── KPI type (returned by kpi_summary() RPC) ───────────────────────────────
+type KpiData = {
+  total: number; open: number;
+  clean_rate: number; denial_rate: number;
+  total_billed: number; total_balance: number; collections_mtd: number;
+  ar_0_5: number; ar_6_15: number; ar_16_30: number; ar_31_plus: number;
+};
 
 // ── Sub-components ────────────────────────────────────────────────────────
 function KpiCard({
@@ -89,7 +64,7 @@ function KanbanCard({ item, onAdvance, advancing }: {
     <div className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="font-medium text-slate-800 text-xs truncate">{item.invoice_ref ?? '—'}</div>
+          <div className="font-mono text-slate-800 text-xs truncate">{item.invoice_ref ?? '—'}</div>
         </div>
         <div className={`text-[10px] font-medium shrink-0 ${days > 10 ? 'text-red-500' : days > 5 ? 'text-amber-500' : 'text-slate-400'}`}>
           {days}d
@@ -103,7 +78,7 @@ function KanbanCard({ item, onAdvance, advancing }: {
       )}
       <div className="mt-2 flex items-center justify-between">
         <span className="text-xs font-semibold text-slate-700">
-          ${(item.value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+          ${(item.billed_amount ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}
         </span>
         {next && (
           <button
@@ -132,39 +107,27 @@ function formatCurrency(amount: number): string {
 export default function Pipeline() {
   const { staff } = useAuth();
   const [items, setItems] = useState<WorkItem[]>([]);
-  const [collectionsMtd, setCollectionsMtd] = useState(0);
+  const [kpi, setKpi] = useState<KpiData | null>(null);
   const [loading, setLoading] = useState(true);
   const [advancing, setAdvancing] = useState<string | null>(null);
   const [serviceLineFilter, setServiceLineFilter] = useState('');
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
-
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    // Run both queries in parallel
-    const [workItemsRes, paymentsRes] = await Promise.all([
-      // Note: no teams() join — work_items has no FK to teams
+    // KPIs computed server-side over full table (respects RLS).
+    // Kanban fetches open items only, capped at 500 for display.
+    const [kpiRes, workItemsRes] = await Promise.all([
+      supabase.rpc('kpi_summary'),
       supabase
         .from('work_items')
         .select('*, clients(name), assigned_staff:staff!assigned_to(full_name)')
-        .order('created_at', { ascending: true }),
-      supabase
-        .from('payments')
-        .select('amount')
-        .gte('paid_at', startOfMonth.toISOString()),
+        .neq('current_stage', TERMINAL_STAGE)
+        .order('updated_at', { ascending: false })
+        .limit(500),
     ]);
-
-    console.log('[Pipeline] work_items:', workItemsRes.data?.length ?? 0, 'rows | error:', workItemsRes.error?.message ?? 'none');
-    console.log('[Pipeline] payments MTD:', paymentsRes.data?.length ?? 0, 'rows | error:', paymentsRes.error?.message ?? 'none');
-
+    console.log('[Pipeline] kpi:', kpiRes.error?.message ?? 'ok', '| work_items:', workItemsRes.data?.length ?? 0, 'rows | error:', workItemsRes.error?.message ?? 'none');
+    setKpi((kpiRes.data as KpiData) ?? null);
     setItems(workItemsRes.data ?? []);
-
-    const mtd = (paymentsRes.data ?? []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-    setCollectionsMtd(mtd);
-
     setLoading(false);
   }, []);
 
@@ -189,7 +152,12 @@ export default function Pipeline() {
     await fetchItems();
   }
 
-  const { cleanRate, denialRate, arBuckets } = computeKpis(items);
+  const arBuckets = kpi ? [
+    { label: '0–5d',   count: kpi.ar_0_5     },
+    { label: '6–15d',  count: kpi.ar_6_15    },
+    { label: '16–30d', count: kpi.ar_16_30   },
+    { label: '30d+',   count: kpi.ar_31_plus },
+  ] : [];
 
   // Apply service_line filter before grouping into columns
   const displayItems = serviceLineFilter
@@ -218,7 +186,8 @@ export default function Pipeline() {
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Pipeline</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            {displayItems.length}{serviceLineFilter ? ` ${serviceLineFilter}` : ''} claims · {displayItems.filter(i => i.current_stage !== TERMINAL_STAGE).length} open
+            {kpi?.total.toLocaleString() ?? '—'} total · {kpi?.open.toLocaleString() ?? '—'} open
+            {serviceLineFilter ? ` · ${displayItems.length} ${serviceLineFilter}` : ''}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -246,17 +215,17 @@ export default function Pipeline() {
       <div className="grid grid-cols-4 gap-4 mb-6">
         <KpiCard
           label="Clean Claim Rate"
-          value={`${cleanRate}%`}
+          value={kpi ? `${kpi.clean_rate}%` : '—'}
           icon={TrendingUp}
           color="bg-green-50 text-green-600"
-          trend={cleanRate >= 70 ? 'up' : 'down'}
+          trend={kpi ? (kpi.clean_rate >= 70 ? 'up' : 'down') : undefined}
         />
         <KpiCard
           label="Denial Rate"
-          value={`${denialRate}%`}
+          value={kpi ? `${kpi.denial_rate}%` : '—'}
           icon={TrendingDown}
           color="bg-red-50 text-red-500"
-          trend={denialRate <= 15 ? 'up' : 'down'}
+          trend={kpi ? (kpi.denial_rate <= 15 ? 'up' : 'down') : undefined}
         />
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-start justify-between mb-3">
@@ -276,7 +245,7 @@ export default function Pipeline() {
         </div>
         <KpiCard
           label="Collections MTD"
-          value={formatCurrency(collectionsMtd)}
+          value={formatCurrency(kpi?.collections_mtd ?? 0)}
           icon={DollarSign}
           color="bg-teal-50 text-teal-600"
         />
