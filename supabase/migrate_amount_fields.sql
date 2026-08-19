@@ -20,7 +20,19 @@ WHERE billed_amount = 0
   AND value IS NOT NULL
   AND value <> 0;
 
--- ── 3. Drop old value column ──────────────────────────────
+-- ── 3. Add real Kennebec clients (upsert — safe to re-run) ──
+-- Replaces/supplements the 20 fictional seed clients with the
+-- real five locations. ON CONFLICT DO NOTHING = no-op on re-run.
+INSERT INTO clients (name, specialty, location) VALUES
+  ('Kennebec Pharmacy and Home-Augusta',       'DME / Home Health', 'Augusta, ME'),
+  ('Kennebec Pharmacy and Home-Brunswick',     'DME / Home Health', 'Brunswick, ME'),
+  ('Kennebec Pharmacy and Home-South Portland','DME / Home Health', 'South Portland, ME'),
+  ('Kennebec Pharmacy and Home-Auburn',        'DME / Home Health', 'Auburn, ME'),
+  ('Kennebec Pharmacy and Home-Rockport',      'DME / Home Health', 'Rockport, ME')
+ON CONFLICT (name) DO NOTHING;
+
+
+-- ── 4. Drop old value column ──────────────────────────────
 -- Uncomment after confirming billed_amount is populated from re-import.
 -- ALTER TABLE work_items DROP COLUMN IF EXISTS value;
 
