@@ -1,38 +1,28 @@
 -- ============================================================
--- RevorHealth — Replace value with billed_amount + balance_amount
---               and add server-side kpi_summary() RPC
+-- RevorHealth — Replace value with billed_amount + balance_amount,
+--               add source_schema tracking, and kpi_summary() RPC
 --
 -- Safe to re-run: ADD COLUMN IF NOT EXISTS + CREATE OR REPLACE FUNCTION.
+-- Run AFTER migrate_clients.sql (import script requires client rows to exist).
 -- Run in Supabase SQL Editor.
 -- ============================================================
 
--- ── 1. Add new amount columns ─────────────────────────────
+-- ── 1. Add new amount + tracking columns ──────────────────
 ALTER TABLE work_items
   ADD COLUMN IF NOT EXISTS billed_amount  numeric(10,2) NOT NULL DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS balance_amount numeric(10,2) NOT NULL DEFAULT 0;
+  ADD COLUMN IF NOT EXISTS balance_amount numeric(10,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS source_schema  text;          -- 'A', 'B', or 'seed'
 
 -- ── 2. Migrate: copy value → billed_amount where not yet set ──
 -- No-op if value was already $0 (common on first import due to ClaimBalance bug).
--- Re-import should populate billed_amount directly after this migration runs.
+-- Re-import populates billed_amount directly after this migration runs.
 UPDATE work_items
 SET billed_amount = value
 WHERE billed_amount = 0
   AND value IS NOT NULL
   AND value <> 0;
 
--- ── 3. Add real Kennebec clients (upsert — safe to re-run) ──
--- Replaces/supplements the 20 fictional seed clients with the
--- real five locations. ON CONFLICT DO NOTHING = no-op on re-run.
-INSERT INTO clients (name, specialty, location) VALUES
-  ('Kennebec Pharmacy and Home-Augusta',       'DME / Home Health', 'Augusta, ME'),
-  ('Kennebec Pharmacy and Home-Brunswick',     'DME / Home Health', 'Brunswick, ME'),
-  ('Kennebec Pharmacy and Home-South Portland','DME / Home Health', 'South Portland, ME'),
-  ('Kennebec Pharmacy and Home-Auburn',        'DME / Home Health', 'Auburn, ME'),
-  ('Kennebec Pharmacy and Home-Rockport',      'DME / Home Health', 'Rockport, ME')
-ON CONFLICT (name) DO NOTHING;
-
-
--- ── 4. Drop old value column ──────────────────────────────
+-- ── 3. Drop old value column ──────────────────────────────
 -- Uncomment after confirming billed_amount is populated from re-import.
 -- ALTER TABLE work_items DROP COLUMN IF EXISTS value;
 

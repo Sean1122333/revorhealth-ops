@@ -57,6 +57,8 @@ CREATE TABLE work_items (
   denial_appealable  boolean,
   -- Invoice/claim reference — maps to invoice_number on real import. NO PHI.
   invoice_ref        text          UNIQUE,
+  -- Which source file this row came from: 'A' (Denials), 'B' (AR Manager), 'seed'
+  source_schema      text,
   -- Service line dimension (derived from patient_team on real import)
   service_line       text CHECK (service_line IN ('CPAP','Respiratory','Retail','Intake','Other')),
   created_at         timestamptz   NOT NULL DEFAULT now(),
@@ -561,11 +563,11 @@ BEGIN
       INSERT INTO work_items (
         client_id, patient_fake_name, invoice_ref, current_stage, status,
         assigned_to, billed_amount, balance_amount, days_in_stage, created_at, updated_at,
-        raw_status, denial_category, denial_appealable, service_line
+        raw_status, denial_category, denial_appealable, service_line, source_schema
       ) VALUES (
         chosen_client, patient_name, invoice_ref_val, v_slug, chosen_status,
         chosen_staff, chosen_billed, chosen_balance, chosen_days, created_ts, updated_ts,
-        chosen_raw_status, chosen_denial_cat, chosen_appealable, chosen_service_line
+        chosen_raw_status, chosen_denial_cat, chosen_appealable, chosen_service_line, 'seed'
       )
       RETURNING id INTO new_item_id;
 

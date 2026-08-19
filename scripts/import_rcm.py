@@ -380,6 +380,7 @@ def process_schema_a(filepath: str, client_map: dict) -> list:
             'denial_category': dc,
             'denial_appealable': derive_appealable(dc),
             'service_line':    patient_team_to_service_line(r.get('patient_team')),
+            'source_schema':   'A',
             # Internal sort key for cross-schema dedup (stripped before upsert)
             '_sort_ts': r['denial_posted_date'].timestamp()
                         if pd.notna(r.get('denial_posted_date')) else 0,
@@ -446,6 +447,7 @@ def process_schema_b(filepath: str, client_map: dict) -> list:
             'denial_appealable': None,
             'service_line':    therapy_to_service_line(r.get('Therapy'),
                                                        r.get('Line_of_business')),
+            'source_schema':   'B',
             '_sort_ts': r['LastFollowupDate'].timestamp()
                         if pd.notna(r.get('LastFollowupDate')) else 0,
         })

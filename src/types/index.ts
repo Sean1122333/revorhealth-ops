@@ -45,6 +45,8 @@ export interface WorkItem {
   days_in_stage: number;
   created_at: string;
   updated_at: string;
+  /** Which source file populated this row: 'A' (Denials), 'B' (AR Manager), 'seed'. */
+  source_schema?: string | null;
   // §2 / §3 blueprint fields
   raw_status?: string | null;
   denial_category?: string | null;
