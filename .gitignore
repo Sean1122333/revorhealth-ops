@@ -2,3 +2,4 @@ node_modules\ndist\n.env
 .vercel
 .env
 scripts/staff_batch.csv
+scripts/staff_passwords.csv
