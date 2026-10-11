@@ -10,8 +10,8 @@ Usage:
 Environment (reads from .env or shell):
     VITE_SUPABASE_URL       e.g. https://xxx.supabase.co
     VITE_SUPABASE_ANON_KEY  anon/public key
-    IMPORT_EMAIL            Supabase auth email  (default: manager@demo.rcm)
-    IMPORT_PASSWORD         Supabase auth password (default: Demo1234!)
+    IMPORT_EMAIL            Supabase auth email  (required — no default)
+    IMPORT_PASSWORD         Supabase auth password (required — no default)
 
 PHI boundary: only non-PHI columns are read. Patient name, DOB, MRN, address,
 insurance ID, and diagnosis columns are never loaded or processed.
@@ -41,8 +41,8 @@ _load_dotenv()
 
 SUPABASE_URL  = os.environ.get('VITE_SUPABASE_URL', '').rstrip('/')
 ANON_KEY      = os.environ.get('VITE_SUPABASE_ANON_KEY', '')
-IMPORT_EMAIL  = os.environ.get('IMPORT_EMAIL',    'manager@demo.rcm')
-IMPORT_PASS   = os.environ.get('IMPORT_PASSWORD', 'Demo1234!')
+IMPORT_EMAIL  = os.environ.get('IMPORT_EMAIL',    '')
+IMPORT_PASS   = os.environ.get('IMPORT_PASSWORD', '')
 
 BATCH_SIZE = 500
 TODAY      = date.today()
@@ -471,6 +471,8 @@ def main():
 
     if not SUPABASE_URL or not ANON_KEY:
         sys.exit('Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env')
+    if not IMPORT_EMAIL or not IMPORT_PASS:
+        sys.exit('Set IMPORT_EMAIL and IMPORT_PASSWORD in .env (no defaults — see docstring)')
 
     print(f'Target: {SUPABASE_URL}')
     print(f'Mode:   {"DRY RUN" if args.dry_run else "LIVE"}')
