@@ -3,3 +3,4 @@ node_modules\ndist\n.env
 .env
 scripts/staff_batch.csv
 scripts/staff_passwords.csv
+scripts/*.csv
