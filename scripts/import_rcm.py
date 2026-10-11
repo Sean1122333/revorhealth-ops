@@ -314,6 +314,77 @@ def upsert_batch(token: str, rows: list, dry_run: bool) -> bool:
     return True
 
 
+def fetch_existing_refs(token: str, invoice_refs: list) -> dict:
+    """Returns {invoice_ref: current_stage} for the given refs that already exist in DB.
+
+    Queries only the specific refs we need (batched via in.(...)) — no full-table scan,
+    so this works regardless of total table size.
+    Values are quoted ("ref") so the filter is safe regardless of ref format.
+    Any HTTP error in a chunk is fatal — no retry.
+    """
+    BATCH = 100
+    result: dict = {}
+    for i in range(0, len(invoice_refs), BATCH):
+        chunk = invoice_refs[i:i + BATCH]
+        quoted = ','.join(f'"{r}"' for r in chunk)
+        r = requests.get(
+            f'{SUPABASE_URL}/rest/v1/work_items',
+            params={
+                'select': 'invoice_ref,current_stage',
+                'invoice_ref': f'in.({quoted})',
+            },
+            headers=_headers(token),
+            timeout=15,
+        )
+        if not r.ok:
+            sys.exit(
+                f'fetch_existing_refs chunk {i // BATCH + 1}: '
+                f'HTTP {r.status_code} — {r.text[:200]}'
+            )
+        for row in r.json():
+            result[row['invoice_ref']] = row['current_stage']
+    return result
+
+
+def verify_new_refs_absent(token: str, new_refs: list) -> None:
+    """Safety double-check: abort if any ref classified as NEW is found in DB.
+
+    Guards against a race condition (row inserted after our fetch) or a fetch bug
+    that silently missed a ref. Uses the same quoted in.() batch pattern.
+    Any HTTP error is fatal — no retry.
+    """
+    if not new_refs:
+        return
+    BATCH = 100
+    ghost_refs: list = []
+    for i in range(0, len(new_refs), BATCH):
+        chunk = new_refs[i:i + BATCH]
+        quoted = ','.join(f'"{r}"' for r in chunk)
+        r = requests.get(
+            f'{SUPABASE_URL}/rest/v1/work_items',
+            params={
+                'select': 'invoice_ref',
+                'invoice_ref': f'in.({quoted})',
+            },
+            headers=_headers(token),
+            timeout=15,
+        )
+        if not r.ok:
+            sys.exit(
+                f'verify_new_refs_absent chunk {i // BATCH + 1}: '
+                f'HTTP {r.status_code} — {r.text[:200]}'
+            )
+        for row in r.json():
+            ghost_refs.append(row['invoice_ref'])
+    if ghost_refs:
+        sample = ghost_refs[:5]
+        tail = ' …' if len(ghost_refs) > 5 else ''
+        sys.exit(
+            f'ABORT: {len(ghost_refs)} "new" ref(s) found in DB on re-check '
+            f'(race condition or fetch bug): {sample}{tail}'
+        )
+
+
 # ── Amount parser ─────────────────────────────────────────────────────────────
 def parse_amount(v) -> float:
     if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -467,6 +538,10 @@ def main():
                         help='Path to Schema B (AR Manager Report) CSV')
     parser.add_argument('--dry-run', action='store_true',
                         help='Transform and report counts without writing to Supabase')
+    parser.add_argument('--limit', type=int, default=None,
+                        help='Cap deduped rows to N (for testing; applied after --refs)')
+    parser.add_argument('--refs', default='',
+                        help='Comma-separated invoice_refs to restrict the run (dry or live)')
     args = parser.parse_args()
 
     if not SUPABASE_URL or not ANON_KEY:
@@ -538,6 +613,71 @@ def main():
     for row in deduped:
         del row['_sort_ts']
 
+    # ── Apply --refs filter ───────────────────────────────────────────────────
+    refs_filter: set = set()
+    if args.refs:
+        refs_filter = {r.strip() for r in args.refs.split(',') if r.strip()}
+        deduped = [row for row in deduped if row['invoice_ref'] in refs_filter]
+        print(f'\n--refs: {len(refs_filter)} ref(s) requested, {len(deduped)} found in CSV')
+
+    # ── Apply --limit ─────────────────────────────────────────────────────────
+    if args.limit is not None:
+        deduped = deduped[:args.limit]
+        print(f'--limit: capped to {len(deduped)} row(s)')
+
+    # ── Fetch existing stages from DB (only for refs in our batch) ───────────
+    print('\nFetching existing stages from DB…')
+    all_refs = [row['invoice_ref'] for row in deduped]
+    # Also include any --refs filter refs not found in CSV (for dry-run table)
+    extra_refs = [r for r in refs_filter if r not in set(all_refs)] if refs_filter else []
+    db_dict = fetch_existing_refs(token, all_refs + extra_refs)
+    print(f'  {len(db_dict):,} of {len(all_refs):,} batch refs already exist in DB')
+
+    # ── Preserve current_stage for existing refs; tag source stage for reporting
+    n_insert = 0
+    n_update = 0
+    for row in deduped:
+        ref = row['invoice_ref']
+        row['_source_stage'] = row['current_stage']   # save CSV-mapped stage
+        if ref in db_dict:
+            row['current_stage'] = db_dict[ref]       # DB wins for existing rows
+            n_update += 1
+        else:
+            n_insert += 1
+
+    # ── Verify new refs are genuinely absent (safety double-check) ────────────
+    new_refs = [row['invoice_ref'] for row in deduped if row['invoice_ref'] not in db_dict]
+    if new_refs:
+        print(f'\nVerifying {len(new_refs):,} new ref(s) are absent from DB…')
+        verify_new_refs_absent(token, new_refs)
+        print('  OK')
+
+    # ── --refs dry-run: per-ref detail table ──────────────────────────────────
+    if args.dry_run and refs_filter:
+        col = (14, 22, 22, 22)
+        hdr = ('invoice_ref', 'DB stage', 'source stage', 'would write')
+        print()
+        print('  ' + '  '.join(h.ljust(w) for h, w in zip(hdr, col)))
+        print('  ' + '  '.join('-' * w for w in col))
+        found_refs = set()
+        for row in deduped:
+            ref         = row['invoice_ref']
+            found_refs.add(ref)
+            db_stage    = db_dict.get(ref, '(new)')
+            src_stage   = row['_source_stage']
+            final_stage = row['current_stage']
+            print('  ' + '  '.join(s.ljust(w) for s, w in zip(
+                (ref, db_stage, src_stage, final_stage), col
+            )))
+        for ref in sorted(refs_filter - found_refs):
+            db_stage = db_dict.get(ref, '(not in DB)')
+            row_vals = (ref, db_stage, '(not in CSV)', '—')
+            print('  ' + '  '.join(s.ljust(w) for s, w in zip(row_vals, col)))
+
+    # Strip temp key before upsert
+    for row in deduped:
+        row.pop('_source_stage', None)
+
     # ── Upsert in batches ─────────────────────────────────────────────────────
     total  = len(deduped)
     errors = 0
@@ -554,9 +694,15 @@ def main():
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print(f'\n{"="*50}')
-    print(f'{"DRY RUN — " if args.dry_run else ""}Import complete')
-    print(f'  Rows upserted : {total:,}')
-    print(f'  Batch errors  : {errors}')
+    if args.dry_run:
+        print('DRY RUN — no data written')
+        print(f'  Would INSERT  : {n_insert:,}')
+        print(f'  Would UPDATE  : {n_update:,} (stage preserved from DB)')
+    else:
+        print('Import complete')
+        print(f'  Rows upserted : {total:,}')
+        print(f'  Updated (stage preserved): {n_update:,}')
+        print(f'  Batch errors  : {errors}')
     print(f'  Seeded removed: {n_deleted}')
     if errors:
         print('  WARNING: some batches failed — check output above')
