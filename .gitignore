@@ -4,3 +4,5 @@ node_modules\ndist\n.env
 scripts/staff_batch.csv
 scripts/staff_passwords.csv
 scripts/*.csv
+Revor_Team_Structure_Proposed.xlsx
+alias_map.csv
