@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './lib/auth';
 import Login from './pages/Login';
@@ -5,6 +6,7 @@ import Layout from './components/Layout';
 import MyQueue from './pages/MyQueue';
 import TeamQueue from './pages/TeamQueue';
 import Pipeline from './pages/Pipeline';
+import Reports from './pages/Reports';
 
 function RoleRedirect() {
   const { staff } = useAuth();
@@ -12,6 +14,13 @@ function RoleRedirect() {
   if (staff.role === 'manager') return <Navigate to="/pipeline" replace />;
   if (staff.role === 'team_lead') return <Navigate to="/team" replace />;
   return <Navigate to="/queue" replace />;
+}
+
+function RoleRoute({ roles, children }: { roles: string[]; children: ReactNode }) {
+  const { staff, loading } = useAuth();
+  if (loading || !staff) return null;
+  if (!roles.includes(staff.role)) return <RoleRedirect />;
+  return <>{children}</>;
 }
 
 function ProtectedLayout() {
@@ -37,9 +46,10 @@ export default function App() {
       />
       <Route element={<ProtectedLayout />}>
         <Route index element={<RoleRedirect />} />
-        <Route path="/queue" element={<MyQueue />} />
-        <Route path="/team" element={<TeamQueue />} />
-        <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/queue"    element={<RoleRoute roles={['associate', 'senior_associate']}><MyQueue /></RoleRoute>} />
+        <Route path="/team"     element={<RoleRoute roles={['team_lead']}><TeamQueue /></RoleRoute>} />
+        <Route path="/pipeline" element={<RoleRoute roles={['manager']}><Pipeline /></RoleRoute>} />
+        <Route path="/reports"  element={<RoleRoute roles={['manager']}><Reports /></RoleRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -71,20 +71,54 @@ AS $$
                         FROM payments
                         WHERE paid_at >= date_trunc('month', now())
                       ),
-    'ar_0_5',         COUNT(*) FILTER (
+    'ar_0_30',        COUNT(*) FILTER (
                         WHERE current_stage <> 'payment_posting'
-                          AND days_in_stage BETWEEN 0 AND 5),
-    'ar_6_15',        COUNT(*) FILTER (
+                          AND days_in_stage BETWEEN 0 AND 30),
+    'ar_31_60',       COUNT(*) FILTER (
                         WHERE current_stage <> 'payment_posting'
-                          AND days_in_stage BETWEEN 6 AND 15),
-    'ar_16_30',       COUNT(*) FILTER (
+                          AND days_in_stage BETWEEN 31 AND 60),
+    'ar_61_90',       COUNT(*) FILTER (
                         WHERE current_stage <> 'payment_posting'
-                          AND days_in_stage BETWEEN 16 AND 30),
-    'ar_31_plus',     COUNT(*) FILTER (
+                          AND days_in_stage BETWEEN 61 AND 90),
+    'ar_91_120',      COUNT(*) FILTER (
                         WHERE current_stage <> 'payment_posting'
-                          AND days_in_stage > 30)
+                          AND days_in_stage BETWEEN 91 AND 120),
+    'ar_120_plus',    COUNT(*) FILTER (
+                        WHERE current_stage <> 'payment_posting'
+                          AND days_in_stage > 120)
   )
   FROM work_items
+  WHERE source_schema IN ('A', 'B')
 $$;
 
 GRANT EXECUTE ON FUNCTION kpi_summary() TO authenticated;
+
+
+-- ── 5. Stage counts RPC ───────────────────────────────────────────────────
+--
+-- Returns a JSON object mapping each current_stage to its row count,
+-- filtered to source_schema IN ('A','B') so old null-source rows are excluded.
+-- Used by Pipeline.tsx to show true per-stage totals in kanban column headers,
+-- independent of the 500-row display limit.
+--
+-- Call via: supabase.rpc('stage_counts')
+-- Returns e.g. {"submitted": 25663, "denial_management": 3349, ...}
+-- ──────────────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION stage_counts()
+RETURNS json
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  SELECT json_object_agg(current_stage, cnt)
+  FROM (
+    SELECT current_stage, COUNT(*) AS cnt
+    FROM work_items
+    WHERE source_schema IN ('A', 'B')
+    GROUP BY current_stage
+  ) s
+$$;
+
+GRANT EXECUTE ON FUNCTION stage_counts() TO authenticated;

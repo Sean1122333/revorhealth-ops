@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { LayoutGrid, ListTodo, Users, LogOut } from 'lucide-react';
+import { LayoutGrid, ListTodo, Users, LogOut, BarChart2 } from 'lucide-react';
 
 const roleLabel: Record<string, string> = {
   manager: 'Manager',
@@ -21,7 +21,10 @@ export default function Layout() {
   const navItems = (() => {
     if (!staff) return [];
     if (staff.role === 'manager') {
-      return [{ to: '/pipeline', icon: LayoutGrid, label: 'Pipeline' }];
+      return [
+        { to: '/pipeline', icon: LayoutGrid, label: 'Pipeline' },
+        { to: '/reports',  icon: BarChart2,  label: 'Reports'  },
+      ];
     }
     if (staff.role === 'team_lead') {
       return [{ to: '/team', icon: Users, label: 'Team Queue' }];

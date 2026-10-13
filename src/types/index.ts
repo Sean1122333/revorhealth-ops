@@ -7,6 +7,7 @@ export interface Staff {
   email: string;
   role: Role;
   team_id: string | null;
+  group_id: string | null;
   created_at: string;
 }
 
@@ -52,6 +53,8 @@ export interface WorkItem {
   denial_category?: string | null;
   denial_appealable?: boolean | null;
   service_line?: string | null;
+  /** Insurance payer name (e.g. 'MaineCare', 'Anthem BCBS'). Null for source_schema A/B rows — not populated by import_rcm.py. */
+  payer?: string | null;
   // Joined relations
   clients?: { name: string } | null;
   assigned_staff?: { full_name: string } | null;
