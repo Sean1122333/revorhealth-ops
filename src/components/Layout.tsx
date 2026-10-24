@@ -1,12 +1,13 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { LayoutGrid, ListTodo, Users, LogOut, BarChart2 } from 'lucide-react';
+import { LayoutGrid, ListTodo, Users, LogOut, BarChart2, BookUser } from 'lucide-react';
 
 const roleLabel: Record<string, string> = {
-  manager: 'Manager',
-  team_lead: 'Team Lead',
+  manager:          'Manager',
+  team_lead:        'Team Lead',
   senior_associate: 'Sr. Associate',
-  associate: 'Associate',
+  associate:        'Associate',
+  hr:               'HR',
 };
 
 export default function Layout() {
@@ -22,14 +23,24 @@ export default function Layout() {
     if (!staff) return [];
     if (staff.role === 'manager') {
       return [
-        { to: '/pipeline', icon: LayoutGrid, label: 'Pipeline' },
-        { to: '/reports',  icon: BarChart2,  label: 'Reports'  },
+        { to: '/pipeline',   icon: LayoutGrid, label: 'Pipeline'   },
+        { to: '/reports',    icon: BarChart2,  label: 'Reports'    },
+        { to: '/employees',  icon: BookUser,   label: 'Employees'  },
       ];
     }
     if (staff.role === 'team_lead') {
-      return [{ to: '/team', icon: Users, label: 'Team Queue' }];
+      return [
+        { to: '/team',      icon: Users,    label: 'Team Queue' },
+        { to: '/employees', icon: BookUser, label: 'Employees'  },
+      ];
     }
-    return [{ to: '/queue', icon: ListTodo, label: 'My Queue' }];
+    if (staff.role === 'hr') {
+      return [{ to: '/employees', icon: BookUser, label: 'Employees' }];
+    }
+    return [
+      { to: '/queue',     icon: ListTodo, label: 'My Queue'  },
+      { to: '/employees', icon: BookUser, label: 'Employees' },
+    ];
   })();
 
   return (

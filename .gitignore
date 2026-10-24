@@ -1,8 +1,11 @@
-node_modules\ndist\n.env
-.vercel
+node_modules
+dist
 .env
-scripts/staff_batch.csv
-scripts/staff_passwords.csv
+.env.*
+.env.save
+.vercel
 scripts/*.csv
+scripts/__pycache__/
 Revor_Team_Structure_Proposed.xlsx
 alias_map.csv
+.DS_Store

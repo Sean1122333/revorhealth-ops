@@ -7,12 +7,14 @@ import MyQueue from './pages/MyQueue';
 import TeamQueue from './pages/TeamQueue';
 import Pipeline from './pages/Pipeline';
 import Reports from './pages/Reports';
+import Employees from './pages/Employees';
 
 function RoleRedirect() {
   const { staff } = useAuth();
   if (!staff) return null;
   if (staff.role === 'manager') return <Navigate to="/pipeline" replace />;
   if (staff.role === 'team_lead') return <Navigate to="/team" replace />;
+  if (staff.role === 'hr') return <Navigate to="/employees" replace />;
   return <Navigate to="/queue" replace />;
 }
 
@@ -49,7 +51,8 @@ export default function App() {
         <Route path="/queue"    element={<RoleRoute roles={['associate', 'senior_associate']}><MyQueue /></RoleRoute>} />
         <Route path="/team"     element={<RoleRoute roles={['team_lead']}><TeamQueue /></RoleRoute>} />
         <Route path="/pipeline" element={<RoleRoute roles={['manager']}><Pipeline /></RoleRoute>} />
-        <Route path="/reports"  element={<RoleRoute roles={['manager']}><Reports /></RoleRoute>} />
+        <Route path="/reports"    element={<RoleRoute roles={['manager']}><Reports /></RoleRoute>} />
+        <Route path="/employees" element={<RoleRoute roles={['associate', 'senior_associate', 'team_lead', 'manager', 'hr']}><Employees /></RoleRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

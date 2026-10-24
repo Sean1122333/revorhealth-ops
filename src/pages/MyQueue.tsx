@@ -22,54 +22,68 @@ function StageBadge({ stage }: { stage: string }) {
   );
 }
 
-type TeamStageSummary = { claim_count: number; total_billed: number; avg_days: number };
-type ViewMode = 'team' | 'assigned';
-
 export default function MyQueue() {
   const { staff } = useAuth();
   const [items, setItems] = useState<WorkItem[]>([]);
-  const [summary, setSummary] = useState<TeamStageSummary | null>(null);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalBilled, setTotalBilled] = useState(0);
   const [loading, setLoading] = useState(true);
   const [advancing, setAdvancing] = useState<string | null>(null);
   const [advanceError, setAdvanceError] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState('');
-  const [viewMode, setViewMode] = useState<ViewMode>('team');
 
-  async function fetchItems(mode: ViewMode) {
+  async function fetchItems() {
     if (!staff?.group_id) {
       setLoading(false);
       return;
     }
     setLoading(true);
 
-    const [slugsRes, summaryRes] = await Promise.all([
-      supabase.from('teams').select('slug').eq('group_id', staff.group_id),
-      mode === 'team'
-        ? supabase.rpc('team_stage_summary')
-        : supabase.rpc('my_assigned_summary'),
-    ]);
+    const slugsRes = await supabase
+      .from('teams').select('slug').eq('group_id', staff.group_id);
     if (slugsRes.error) console.error('[MyQueue] slugs error:', slugsRes.error.message);
-    if (summaryRes.error) console.error('[MyQueue] summary error:', summaryRes.error.message);
-
-    setSummary((summaryRes.data as TeamStageSummary) ?? null);
 
     const stageSlugs = (slugsRes.data ?? []).map(r => r.slug).filter(s => s !== TERMINAL_STAGE);
-    if (!stageSlugs.length) { setItems([]); setLoading(false); return; }
+    if (!stageSlugs.length) {
+      setItems([]); setTotalCount(0); setTotalBilled(0); setLoading(false); return;
+    }
 
-    // One query per stage in the group — no shared 500-row limit
-    const stageResults = await Promise.all(
-      stageSlugs.map(slug => {
-        let q = supabase
+    const [countRes, billedRes, ...stageResults] = await Promise.all([
+      // Exact count from DB — no rows fetched
+      supabase
+        .from('work_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('assigned_to', staff.id)
+        .in('source_schema', ['A', 'B'])
+        .in('current_stage', stageSlugs),
+
+      // Lightweight billed_amount fetch for client-side sum
+      supabase
+        .from('work_items')
+        .select('billed_amount')
+        .eq('assigned_to', staff.id)
+        .in('source_schema', ['A', 'B'])
+        .in('current_stage', stageSlugs)
+        .limit(10000),
+
+      // Per-stage list — assigned to me only, limit 2000
+      ...stageSlugs.map(slug =>
+        supabase
           .from('work_items')
           .select('*, clients(name), assigned_staff:staff!assigned_to(full_name)')
           .eq('current_stage', slug)
+          .eq('assigned_to', staff.id)
           .in('source_schema', ['A', 'B'])
           .order('created_at', { ascending: true })
-          .limit(500);
-        if (mode === 'assigned') q = q.eq('assigned_to', staff!.id);
-        return q;
-      })
-    );
+          .limit(2000)
+      ),
+    ]);
+
+    if (countRes.error) console.error('[MyQueue] count error:', countRes.error.message);
+    if (billedRes.error) console.error('[MyQueue] billed error:', billedRes.error.message);
+
+    setTotalCount(countRes.count ?? 0);
+    setTotalBilled((billedRes.data ?? []).reduce((s, r) => s + (r.billed_amount ?? 0), 0));
 
     const allItems = stageResults.flatMap((r, i) => {
       if (r.error) console.error(`[MyQueue] fetch error (${stageSlugs[i]}):`, r.error.message);
@@ -80,7 +94,7 @@ export default function MyQueue() {
     setLoading(false);
   }
 
-  useEffect(() => { fetchItems(viewMode); }, [staff, viewMode]);
+  useEffect(() => { fetchItems(); }, [staff]);
 
   async function advance(item: WorkItem) {
     if (!getNextStage(item.current_stage)) return;
@@ -104,15 +118,13 @@ export default function MyQueue() {
       setAdvanceError('Something went wrong — refresh and try again.');
     }
     setAdvancing(null);
-    await fetchItems(viewMode);
+    await fetchItems();
   }
 
   const stagesPresent = [...new Set(items.map(i => i.current_stage))].sort(
     (a, b) => STAGE_ORDER.indexOf(a as never) - STAGE_ORDER.indexOf(b as never)
   );
   const displayed = stageFilter ? items.filter(i => i.current_stage === stageFilter) : items;
-  const claimCount = summary?.claim_count ?? items.length;
-  const totalValue = summary?.total_billed ?? items.reduce((s, i) => s + (i.billed_amount ?? 0), 0);
 
   return (
     <div className="p-6 bg-[#FAFAF8] min-h-full">
@@ -121,43 +133,17 @@ export default function MyQueue() {
         <div>
           <h1 className="text-xl font-semibold text-[#141B2E]">My Queue</h1>
           <p className="text-[#5B6472] text-sm mt-0.5">
-            {claimCount.toLocaleString()} open {claimCount === 1 ? 'claim' : 'claims'} ·{' '}
-            ${totalValue.toLocaleString('en-US', { minimumFractionDigits: 0 })} total
-            {viewMode === 'assigned' && ' · assigned to me'}
+            {totalCount.toLocaleString()} open {totalCount === 1 ? 'claim' : 'claims'} ·{' '}
+            ${totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })} total
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {/* View mode toggle */}
-          <div className="flex items-center rounded-lg border border-[#E5E7EB] bg-[#FAFAF8] overflow-hidden text-xs font-medium">
-            <button
-              onClick={() => setViewMode('team')}
-              className={`px-3 py-1.5 transition-colors ${
-                viewMode === 'team'
-                  ? 'bg-[#141B2E] text-white'
-                  : 'text-[#5B6472] hover:text-[#141B2E] hover:bg-[#F5F5F2]'
-              }`}
-            >
-              Team Queue
-            </button>
-            <button
-              onClick={() => setViewMode('assigned')}
-              className={`px-3 py-1.5 transition-colors ${
-                viewMode === 'assigned'
-                  ? 'bg-[#141B2E] text-white'
-                  : 'text-[#5B6472] hover:text-[#141B2E] hover:bg-[#F5F5F2]'
-              }`}
-            >
-              My Assigned
-            </button>
-          </div>
-          <button
-            onClick={() => fetchItems(viewMode)}
-            className="flex items-center gap-1.5 text-[#5B6472] hover:text-[#141B2E] text-sm transition-colors"
-          >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-        </div>
+        <button
+          onClick={fetchItems}
+          className="flex items-center gap-1.5 text-[#5B6472] hover:text-[#141B2E] text-sm transition-colors"
+        >
+          <RefreshCw size={14} />
+          Refresh
+        </button>
       </div>
 
       {/* Advance error banner */}

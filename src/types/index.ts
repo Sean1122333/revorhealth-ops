@@ -1,4 +1,4 @@
-export type Role = 'manager' | 'team_lead' | 'senior_associate' | 'associate';
+export type Role = 'manager' | 'team_lead' | 'senior_associate' | 'associate' | 'hr';
 
 export interface Staff {
   id: string;
@@ -9,6 +9,11 @@ export interface Staff {
   team_id: string | null;
   group_id: string | null;
   created_at: string;
+  // Editable profile fields (added in add_staff_fields.sql)
+  shift?: string | null;
+  join_date?: string | null;
+  phone?: string | null;
+  status?: 'active' | 'on_leave' | 'exited' | null;
 }
 
 export interface Team {
